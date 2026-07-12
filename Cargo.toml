@@ -1,0 +1,51 @@
+[workspace]
+members = ["."]
+resolver = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true
+
+[package]
+name = "boltwire"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+authors = ["Abdelkader Boudih <oss@seuros.com>"]
+description = "Async Bolt protocol driver for Neo4j and Memgraph"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/contriboss/boltwire"
+
+[features]
+default = []
+tls = []
+tls-rustls = ["tls", "dep:tokio-rustls", "dep:webpki-roots", "dep:rustls-pemfile", "dep:rustls-native-certs"]
+serde = ["dep:serde"]
+tracing = ["dep:tracing"]
+
+[dependencies]
+tokio = { version = "1.47", features = ["net", "io-util", "rt", "macros", "time", "sync"] }
+thiserror = "2.0"
+chrono-machines = "0.4"
+rand = "0.10"
+serde = { version = "1.0", optional = true }
+tracing = { version = "0.1", optional = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"], optional = true }
+webpki-roots = { version = "1", optional = true }
+rustls-pemfile = { version = "2", optional = true }
+rustls-native-certs = { version = "0.8", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.47", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+
+[lints.rust]
+unsafe_code = "deny"
+unused_must_use = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

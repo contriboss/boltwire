@@ -3,7 +3,7 @@
 A **pure-Rust, async** [Bolt protocol](https://neo4j.com/docs/bolt/current/bolt/)
 driver for **Neo4j** and **Memgraph**. Ported from
 [ActiveCypher](https://github.com/seuros/activecypher)'s battle-tested Ruby Bolt
-stack - same PackStream codec, same Memgraph handling,same bugs. 
+stack - same PackStream codec, same Memgraph handling, same bugs.
 Find them here, fix them everywhere.
 
 ## Usage

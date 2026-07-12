@@ -78,6 +78,7 @@ fn int(fields: &[BoltValue], i: usize) -> Option<i64> {
     fields.get(i).and_then(BoltValue::as_int)
 }
 
+#[allow(clippy::cast_precision_loss)] // servers send coordinates as Int when whole
 fn float(fields: &[BoltValue], i: usize) -> Option<f64> {
     match fields.get(i)? {
         BoltValue::Float(f) => Some(*f),

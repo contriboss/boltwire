@@ -87,7 +87,7 @@ impl RustlsProviderBuilder {
                         .map_err(|e| BoltError::Tls(format!("unusable PEM root: {e}")))?;
                 }
             }
-            ClientConfig::builder().with_root_certificates(roots).into()
+            ClientConfig::builder().with_root_certificates(roots)
         };
 
         let config = match self.identity {

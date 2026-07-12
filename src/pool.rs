@@ -31,8 +31,8 @@ impl Default for PoolConfig {
     fn default() -> Self {
         Self {
             max_size: 8,
-            idle_timeout: Some(Duration::from_secs(300)),
-            max_lifetime: Some(Duration::from_secs(3600)),
+            idle_timeout: Some(Duration::from_mins(5)),
+            max_lifetime: Some(Duration::from_hours(1)),
             connect_attempts: 3,
         }
     }
@@ -244,7 +244,7 @@ mod tests {
             || async { Err::<BoltConnection, _>(BoltError::Closed("unused".into())) },
         );
         let now = Instant::now();
-        let old = now - Duration::from_secs(3600);
+        let old = now.checked_sub(Duration::from_hours(1)).unwrap();
         assert!(pool.expired(now, old)); // idle too long
         assert!(pool.expired(old, now)); // lived too long
         assert!(!pool.expired(now, now)); // fresh

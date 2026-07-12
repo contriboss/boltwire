@@ -431,7 +431,7 @@ impl<'de> de::Deserializer<'de> for BoltValue {
     }
 }
 
-impl<'de> IntoDeserializer<'de, ConvertError> for BoltValue {
+impl IntoDeserializer<'_, ConvertError> for BoltValue {
     type Deserializer = Self;
     fn into_deserializer(self) -> Self {
         self

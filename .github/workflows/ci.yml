@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt + clippy + unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-features --all-targets -- -D warnings
+      - run: cargo test --all-features
+
+  live:
+    name: live (${{ matrix.db }})
+    runs-on: ubuntu-latest
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - db: memgraph
+            image: memgraph/memgraph:latest
+            docker_args: ""
+            bolt_user: ""
+            bolt_pass: ""
+          - db: neo4j
+            image: neo4j:5
+            docker_args: "-e NEO4J_AUTH=neo4j/boltwire-ci"
+            bolt_user: neo4j
+            bolt_pass: boltwire-ci
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Start ${{ matrix.db }}
+        run: docker run -d --name db -p 7687:7687 ${{ matrix.docker_args }} ${{ matrix.image }}
+      - name: Wait for Bolt port
+        run: |
+          for _ in $(seq 1 60); do
+            nc -z 127.0.0.1 7687 && exit 0
+            sleep 2
+          done
+          echo "Bolt port never opened; container logs:"
+          docker logs db
+          exit 1
+      - name: Run live tests
+        env:
+          BOLT_ADDR: 127.0.0.1:7687
+        run: |
+          if [ -n "${{ matrix.bolt_user }}" ]; then
+            export BOLT_USER="${{ matrix.bolt_user }}" BOLT_PASS="${{ matrix.bolt_pass }}"
+          fi
+          cargo test --all-features -- --nocapture

@@ -76,7 +76,7 @@ fn structure_roundtrip() {
 #[test]
 fn large_payloads_use_32bit_markers() {
     // > 65,535 bytes: must encode (STRING_32) and roundtrip.
-    let s = BoltValue::String("x".repeat(70_000));
+    let s = BoltValue::String("x".repeat(70_000).into());
     let mut buf = Vec::new();
     pack(&s, &mut buf).unwrap();
     assert_eq!(buf[0], STRING_32);

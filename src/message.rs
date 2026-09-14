@@ -50,7 +50,7 @@ impl Request {
         let bolt_agent = string_map([("product", user_agent), ("language", &lang)]);
 
         let mut meta = HashMap::new();
-        meta.insert("user_agent".to_string(), BoltValue::String(user_agent.to_string()));
+        meta.insert("user_agent".to_string(), BoltValue::from(user_agent.to_string()));
         meta.insert("bolt_agent".to_string(), BoltValue::Map(bolt_agent));
         Self::with_meta(HELLO, meta)
     }
@@ -85,7 +85,7 @@ impl Request {
         Self::new(
             RUN,
             vec![
-                BoltValue::String(query.to_string()),
+                BoltValue::from(query.to_string()),
                 BoltValue::Map(parameters),
                 BoltValue::Map(extra),
             ],
@@ -125,7 +125,7 @@ impl Request {
     pub fn route(context: HashMap<String, BoltValue>, db: Option<&str>) -> Self {
         let mut extra = HashMap::new();
         if let Some(db) = db {
-            extra.insert("db".to_string(), BoltValue::String(db.to_string()));
+            extra.insert("db".to_string(), BoltValue::from(db.to_string()));
         }
         Self::new(
             ROUTE,
@@ -195,5 +195,5 @@ fn take_map(field: Option<BoltValue>) -> HashMap<String, BoltValue> {
 
 /// Build a string-to-string metadata map.
 fn string_map<const N: usize>(pairs: [(&str, &str); N]) -> HashMap<String, BoltValue> {
-    pairs.into_iter().map(|(k, v)| (k.to_string(), BoltValue::String(v.to_string()))).collect()
+    pairs.into_iter().map(|(k, v)| (k.to_string(), BoltValue::from(v.to_string()))).collect()
 }

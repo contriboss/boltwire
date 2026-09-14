@@ -277,13 +277,13 @@ impl<'a> Reader<'a> {
     fn unpack_string(&mut self, n: usize) -> Result<BoltValue> {
         let bytes = self.take(n)?;
         String::from_utf8(bytes.to_vec())
-            .map(BoltValue::String)
+            .map(BoltValue::from)
             .map_err(|e| BoltError::Protocol(format!("invalid UTF-8 string: {e}")))
     }
 
     fn unpack_bytes(&mut self, width: usize) -> Result<BoltValue> {
         let n = self.size(width)?;
-        Ok(BoltValue::Bytes(self.take(n)?.to_vec()))
+        Ok(BoltValue::Bytes(self.take(n)?.to_vec().into()))
     }
 
     /// Remaining input bytes; caps preallocation from wire-claimed counts.
@@ -308,7 +308,7 @@ impl<'a> Reader<'a> {
         let mut map = HashMap::with_capacity(n.min(self.remaining() / 2));
         for _ in 0..n {
             let key = match self.unpack()? {
-                BoltValue::String(s) => s,
+                BoltValue::String(s) => s.into_owned(),
                 other => {
                     return Err(BoltError::Protocol(format!("map key not a string: {other:?}")));
                 }

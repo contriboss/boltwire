@@ -51,7 +51,7 @@ async fn parameterized_query_and_types() {
     let mut conn = connect().await;
 
     let mut params = HashMap::new();
-    params.insert("name".to_string(), BoltValue::String("Neo".to_string()));
+    params.insert("name".to_string(), BoltValue::String("Neo".into()));
     params.insert("n".to_string(), BoltValue::Int(42));
 
     let result = conn
@@ -61,7 +61,7 @@ async fn parameterized_query_and_types() {
 
     assert_eq!(result.columns, vec!["name".to_string(), "n".to_string(), "mixed".to_string()]);
     let row = &result.records[0];
-    assert_eq!(row[0], BoltValue::String("Neo".to_string()));
+    assert_eq!(row[0], BoltValue::String("Neo".into()));
     assert_eq!(row[1], BoltValue::Int(42));
     assert_eq!(
         row[2],

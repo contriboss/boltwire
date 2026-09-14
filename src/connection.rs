@@ -474,16 +474,16 @@ impl TxOptions {
     fn into_meta(self) -> HashMap<String, BoltValue> {
         let mut meta = HashMap::new();
         if let Some(db) = self.db {
-            meta.insert("db".to_string(), BoltValue::String(db));
+            meta.insert("db".to_string(), BoltValue::from(db));
         }
         if self.read_only {
-            meta.insert("mode".to_string(), BoltValue::String("r".to_string()));
+            meta.insert("mode".to_string(), BoltValue::from("r"));
         }
         if let Some(ms) = self.timeout_ms {
             meta.insert("tx_timeout".to_string(), BoltValue::Int(ms));
         }
         if !self.bookmarks.is_empty() {
-            let list = self.bookmarks.into_iter().map(BoltValue::String).collect();
+            let list = self.bookmarks.into_iter().map(BoltValue::from).collect();
             meta.insert("bookmarks".to_string(), BoltValue::List(list));
         }
         if !self.metadata.is_empty() {

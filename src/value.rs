@@ -1,5 +1,6 @@
 //! The Bolt/PackStream value model.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// `PackStream` structure signatures for graph/temporal types carried in RECORDs.
@@ -23,8 +24,8 @@ pub enum BoltValue {
     Bool(bool),
     Int(i64),
     Float(f64),
-    String(String),
-    Bytes(Vec<u8>),
+    String(Cow<'static, str>),
+    Bytes(Cow<'static, [u8]>),
     List(Vec<BoltValue>),
     Map(HashMap<String, BoltValue>),
     Structure { signature: u8, fields: Vec<BoltValue> },
@@ -44,7 +45,7 @@ macro_rules! accessor {
 }
 
 impl BoltValue {
-    accessor!(as_str -> &str : String(s) => s);
+    accessor!(as_str -> &str : String(s) => s.as_ref());
     accessor!(as_int -> i64 : Int(i) => *i);
     accessor!(as_bool -> bool : Bool(b) => *b);
     accessor!(as_map -> &HashMap<String, BoltValue> : Map(m) => m);
@@ -66,13 +67,18 @@ impl BoltValue {
 }
 
 /// Ergonomic constructors for building parameter/metadata maps.
-impl From<&str> for BoltValue {
-    fn from(s: &str) -> Self {
-        BoltValue::String(s.to_string())
+impl From<&'static str> for BoltValue {
+    fn from(s: &'static str) -> Self {
+        BoltValue::String(Cow::Borrowed(s))
     }
 }
 impl From<String> for BoltValue {
     fn from(s: String) -> Self {
+        BoltValue::String(Cow::Owned(s))
+    }
+}
+impl From<Cow<'static, str>> for BoltValue {
+    fn from(s: Cow<'static, str>) -> Self {
         BoltValue::String(s)
     }
 }

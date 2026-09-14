@@ -110,15 +110,15 @@ impl ser::Serializer for ValueSerializer {
     }
 
     fn serialize_char(self, v: char) -> Result<BoltValue> {
-        Ok(BoltValue::String(v.to_string()))
+        Ok(BoltValue::from(v.to_string()))
     }
 
     fn serialize_str(self, v: &str) -> Result<BoltValue> {
-        Ok(BoltValue::String(v.to_string()))
+        Ok(BoltValue::from(v.to_string()))
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<BoltValue> {
-        Ok(BoltValue::Bytes(v.to_vec()))
+        Ok(BoltValue::Bytes(v.to_vec().into()))
     }
 
     fn serialize_none(self) -> Result<BoltValue> {
@@ -143,7 +143,7 @@ impl ser::Serializer for ValueSerializer {
         _index: u32,
         variant: &'static str,
     ) -> Result<BoltValue> {
-        Ok(BoltValue::String(variant.to_string()))
+        Ok(BoltValue::from(variant))
     }
 
     fn serialize_newtype_struct<T: Serialize + ?Sized>(
@@ -284,7 +284,7 @@ impl ser::SerializeMap for MapSer {
     fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<()> {
         match key.serialize(ValueSerializer)? {
             BoltValue::String(s) => {
-                self.key = Some(s);
+                self.key = Some(s.into_owned());
                 Ok(())
             }
             other => Err(ser::Error::custom(format!("map key must be a string, got {other:?}"))),
@@ -354,8 +354,8 @@ impl<'de> de::Deserializer<'de> for BoltValue {
             BoltValue::Bool(b) => visitor.visit_bool(b),
             BoltValue::Int(i) => visitor.visit_i64(i),
             BoltValue::Float(f) => visitor.visit_f64(f),
-            BoltValue::String(s) => visitor.visit_string(s),
-            BoltValue::Bytes(b) => visitor.visit_byte_buf(b),
+            BoltValue::String(s) => visitor.visit_string(s.into_owned()),
+            BoltValue::Bytes(b) => visitor.visit_byte_buf(b.into_owned()),
             BoltValue::List(items) => {
                 visitor.visit_seq(de::value::SeqDeserializer::new(items.into_iter()))
             }
@@ -390,7 +390,7 @@ impl<'de> de::Deserializer<'de> for BoltValue {
         visitor: V,
     ) -> Result<V::Value> {
         match self {
-            BoltValue::String(s) => visitor.visit_enum(s.into_deserializer()),
+            BoltValue::String(s) => visitor.visit_enum(s.into_owned().into_deserializer()),
             BoltValue::Map(map) if map.len() == 1 => {
                 visitor.visit_enum(de::value::MapAccessDeserializer::new(
                     de::value::MapDeserializer::new(map.into_iter()),

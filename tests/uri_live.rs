@@ -4,10 +4,7 @@ use std::collections::HashMap;
 use boltwire::{BoltValue, Config};
 
 fn creds() -> Option<(String, String)> {
-    Some((
-        std::env::var("BOLT_USER").ok()?,
-        std::env::var("BOLT_PASS").ok()?,
-    ))
+    Some((std::env::var("BOLT_USER").ok()?, std::env::var("BOLT_PASS").ok()?))
 }
 
 #[tokio::test]
@@ -16,11 +13,8 @@ async fn bolt_uri_connects() {
         return;
     };
     let Some((user, pass)) = creds() else { return };
-    let mut conn = Config::from_uri(&format!("bolt://{user}:{pass}@{addr}"))
-        .unwrap()
-        .connect()
-        .await
-        .unwrap();
+    let mut conn =
+        Config::from_uri(&format!("bolt://{user}:{pass}@{addr}")).unwrap().connect().await.unwrap();
     let r = conn.run("RETURN 1 AS n", HashMap::new()).await.unwrap();
     assert_eq!(r.records[0][0], BoltValue::Int(1));
     conn.close().await.unwrap();
@@ -51,10 +45,7 @@ async fn neo4j_uri_routes() {
     };
     let Some((user, pass)) = creds() else { return };
     let config = Config::from_uri(&format!("neo4j://{user}:{pass}@{addr}")).unwrap();
-    assert!(
-        config.connect().await.is_err(),
-        "routed scheme must refuse direct connect"
-    );
+    assert!(config.connect().await.is_err(), "routed scheme must refuse direct connect");
 
     // Docker maps 7687 -> 17687, so the table's advertised addresses aren't
     // dialable here; prove URI -> pool -> ROUTE -> table works.

@@ -27,22 +27,9 @@ async fn derive_roundtrip() {
     };
     let mut conn = BoltConnection::connect(addr, auth).await.unwrap();
 
-    let p = params(&In {
-        name: "Trin".into(),
-        age: 21,
-    })
-    .unwrap();
-    let result = conn
-        .run("RETURN $name AS name, $age * 2 AS doubled", p)
-        .await
-        .unwrap();
+    let p = params(&In { name: "Trin".into(), age: 21 }).unwrap();
+    let result = conn.run("RETURN $name AS name, $age * 2 AS doubled", p).await.unwrap();
     let rows: Vec<Out> = result.rows_as().unwrap();
-    assert_eq!(
-        rows,
-        vec![Out {
-            name: "Trin".into(),
-            doubled: 42
-        }]
-    );
+    assert_eq!(rows, vec![Out { name: "Trin".into(), doubled: 42 }]);
     conn.close().await.unwrap();
 }

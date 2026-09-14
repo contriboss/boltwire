@@ -27,10 +27,7 @@ pub enum BoltValue {
     Bytes(Vec<u8>),
     List(Vec<BoltValue>),
     Map(HashMap<String, BoltValue>),
-    Structure {
-        signature: u8,
-        fields: Vec<BoltValue>,
-    },
+    Structure { signature: u8, fields: Vec<BoltValue> },
 }
 
 /// Generate a `Option`-returning accessor that matches one `BoltValue` variant.
@@ -63,11 +60,7 @@ impl BoltValue {
     #[must_use]
     pub fn as_strings(&self) -> Vec<String> {
         self.as_list()
-            .map(|l| {
-                l.iter()
-                    .filter_map(|v| v.as_str().map(ToString::to_string))
-                    .collect()
-            })
+            .map(|l| l.iter().filter_map(|v| v.as_str().map(ToString::to_string)).collect())
             .unwrap_or_default()
     }
 }

@@ -24,10 +24,7 @@ impl RoutingTable {
 
         let mut table = RoutingTable {
             ttl_seconds: rt.get("ttl").and_then(BoltValue::as_int).unwrap_or(0),
-            db: rt
-                .get("db")
-                .and_then(BoltValue::as_str)
-                .map(ToString::to_string),
+            db: rt.get("db").and_then(BoltValue::as_str).map(ToString::to_string),
             ..Default::default()
         };
 
@@ -38,10 +35,7 @@ impl RoutingTable {
 
         for server in servers {
             let role = server.get("role").and_then(BoltValue::as_str).unwrap_or("");
-            let addresses = server
-                .get("addresses")
-                .map(BoltValue::as_strings)
-                .unwrap_or_default();
+            let addresses = server.get("addresses").map(BoltValue::as_strings).unwrap_or_default();
             match role {
                 "ROUTE" => table.routers.extend(addresses),
                 "READ" => table.readers.extend(addresses),
@@ -61,21 +55,4 @@ impl RoutingTable {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::RoutingTable;
-
-    #[test]
-    fn remove_evicts_from_all_roles() {
-        let mut t = RoutingTable {
-            ttl_seconds: 300,
-            db: None,
-            routers: vec!["a:7687".into(), "b:7687".into()],
-            readers: vec!["a:7687".into(), "b:7687".into()],
-            writers: vec!["a:7687".into()],
-        };
-        t.remove("a:7687");
-        assert_eq!(t.routers, vec!["b:7687".to_string()]);
-        assert_eq!(t.readers, vec!["b:7687".to_string()]);
-        assert!(t.writers.is_empty());
-    }
-}
+mod test;

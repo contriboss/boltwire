@@ -74,9 +74,8 @@ impl Config {
 
         let (auth, hostport) = match rest.rsplit_once('@') {
             Some((userinfo, hp)) => {
-                let (user, pass) = userinfo
-                    .split_once(':')
-                    .ok_or_else(|| err("userinfo needs user:pass"))?;
+                let (user, pass) =
+                    userinfo.split_once(':').ok_or_else(|| err("userinfo needs user:pass"))?;
                 (Some(Auth::basic(user, pass)), hp)
             }
             None => (None, rest),
@@ -84,9 +83,7 @@ impl Config {
 
         // `[::1]:7687` style IPv6 first, then plain host[:port].
         let (host, port) = if let Some(rest) = hostport.strip_prefix('[') {
-            let (h, after) = rest
-                .split_once(']')
-                .ok_or_else(|| err("unclosed IPv6 bracket"))?;
+            let (h, after) = rest.split_once(']').ok_or_else(|| err("unclosed IPv6 bracket"))?;
             let port = match after.strip_prefix(':') {
                 Some(p) => p.parse::<u16>().map_err(|_| err("bad port"))?,
                 None if after.is_empty() => 7687,
@@ -104,17 +101,10 @@ impl Config {
         }
 
         let db = query.and_then(|q| {
-            q.split('&')
-                .find_map(|kv| kv.strip_prefix("db=").map(ToString::to_string))
+            q.split('&').find_map(|kv| kv.strip_prefix("db=").map(ToString::to_string))
         });
 
-        Ok(Self {
-            scheme,
-            host: host.to_string(),
-            port,
-            auth,
-            db,
-        })
+        Ok(Self { scheme, host: host.to_string(), port, auth, db })
     }
 
     #[must_use]
@@ -134,13 +124,7 @@ impl Config {
                 "neo4j:// schemes are routed; use Config::routed_pool".into(),
             ));
         }
-        dial(
-            self.scheme.tls(),
-            &self.addr(),
-            &self.host,
-            self.auth.clone(),
-        )
-        .await
+        dial(self.scheme.tls(), &self.addr(), &self.host, self.auth.clone()).await
     }
 
     /// Routed pool over the cluster behind a `neo4j*` URI (a `bolt*` URI just
@@ -149,21 +133,13 @@ impl Config {
     pub fn routed_pool(&self, max_per_host: usize) -> RoutedPool {
         let tls = self.scheme.tls();
         let auth = self.auth.clone();
-        RoutedPool::new(
-            vec![self.addr()],
-            self.db.clone(),
-            max_per_host,
-            move |server| {
-                let auth = auth.clone();
-                async move {
-                    let host = server
-                        .rsplit_once(':')
-                        .map_or(server.as_str(), |(h, _)| h)
-                        .to_string();
-                    dial(tls, &server, &host, auth).await
-                }
-            },
-        )
+        RoutedPool::new(vec![self.addr()], self.db.clone(), max_per_host, move |server| {
+            let auth = auth.clone();
+            async move {
+                let host = server.rsplit_once(':').map_or(server.as_str(), |(h, _)| h).to_string();
+                dial(tls, &server, &host, auth).await
+            }
+        })
     }
 }
 
@@ -184,57 +160,10 @@ async fn dial(tls: Tls, addr: &str, host: &str, auth: Option<Auth>) -> Result<Bo
         #[cfg(not(feature = "tls-rustls"))]
         Tls::Strict | Tls::AcceptInvalid => {
             let _ = (addr, host);
-            Err(BoltError::Protocol(
-                "TLS scheme requires the tls-rustls feature".into(),
-            ))
+            Err(BoltError::Protocol("TLS scheme requires the tls-rustls feature".into()))
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_full_uri() {
-        let c = Config::from_uri("bolt+s://neo:pass@db.example.com:9999?db=movies").unwrap();
-        assert_eq!(c.scheme, Scheme::BoltS);
-        assert_eq!(c.host, "db.example.com");
-        assert_eq!(c.port, 9999);
-        assert_eq!(c.auth.as_ref().unwrap().principal, "neo");
-        assert_eq!(c.db.as_deref(), Some("movies"));
-    }
-
-    #[test]
-    fn defaults_port_and_optionals() {
-        let c = Config::from_uri("bolt://localhost").unwrap();
-        assert_eq!(
-            (c.port, c.auth.is_none(), c.db.is_none()),
-            (7687, true, true)
-        );
-    }
-
-    #[test]
-    fn neo4j_scheme_is_routed() {
-        assert!(Config::from_uri("neo4j://core1").unwrap().scheme.routed());
-        assert!(!Config::from_uri("bolt://core1").unwrap().scheme.routed());
-    }
-
-    #[test]
-    fn ipv6_hosts() {
-        let c = Config::from_uri("bolt://[::1]:9999").unwrap();
-        assert_eq!((c.host.as_str(), c.port), ("::1", 9999));
-        assert_eq!(c.addr(), "[::1]:9999");
-        let c = Config::from_uri("bolt://[fe80::1]").unwrap();
-        assert_eq!((c.host.as_str(), c.port), ("fe80::1", 7687));
-        assert!(Config::from_uri("bolt://[::1").is_err());
-    }
-
-    #[test]
-    fn rejects_garbage() {
-        assert!(Config::from_uri("http://x").is_err());
-        assert!(Config::from_uri("bolt://").is_err());
-        assert!(Config::from_uri("bolt://host:notaport").is_err());
-        assert!(Config::from_uri("no-scheme").is_err());
-    }
-}
+mod test;

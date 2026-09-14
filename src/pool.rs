@@ -63,13 +63,7 @@ impl Pool {
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<BoltConnection>> + Send + 'static,
     {
-        Self::with_config(
-            PoolConfig {
-                max_size,
-                ..PoolConfig::default()
-            },
-            factory,
-        )
+        Self::with_config(PoolConfig { max_size, ..PoolConfig::default() }, factory)
     }
 
     pub fn with_config<F, Fut>(config: PoolConfig, factory: F) -> Self
@@ -198,55 +192,11 @@ impl Drop for PooledConnection {
             // try_lock: on contention the conn is dropped and the next
             // checkout mints a fresh one. Never blocks in Drop.
             if let Ok(mut idle) = self.inner.idle.try_lock() {
-                idle.push(Idle {
-                    conn,
-                    created_at: self.created_at,
-                    idled_at: Instant::now(),
-                });
+                idle.push(Idle { conn, created_at: self.created_at, idled_at: Instant::now() });
             }
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    #[tokio::test]
-    async fn mint_backs_off_and_counts_attempts() {
-        let attempts = Arc::new(AtomicU32::new(0));
-        let seen = attempts.clone();
-        let pool = Pool::with_config(
-            PoolConfig {
-                max_size: 1,
-                connect_attempts: 3,
-                ..PoolConfig::default()
-            },
-            move || {
-                seen.fetch_add(1, Ordering::SeqCst);
-                async { Err::<BoltConnection, _>(BoltError::Closed("down".into())) }
-            },
-        );
-        assert!(pool.get().await.is_err());
-        assert_eq!(attempts.load(Ordering::SeqCst), 3);
-    }
-
-    #[tokio::test]
-    async fn expiry_rules() {
-        let pool = Pool::with_config(
-            PoolConfig {
-                max_size: 1,
-                idle_timeout: Some(Duration::from_secs(10)),
-                max_lifetime: Some(Duration::from_secs(100)),
-                connect_attempts: 1,
-            },
-            || async { Err::<BoltConnection, _>(BoltError::Closed("unused".into())) },
-        );
-        let now = Instant::now();
-        let old = now.checked_sub(Duration::from_hours(1)).unwrap();
-        assert!(pool.expired(now, old)); // idle too long
-        assert!(pool.expired(old, now)); // lived too long
-        assert!(!pool.expired(now, now)); // fresh
-    }
-}
+mod test;

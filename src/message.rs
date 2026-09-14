@@ -46,17 +46,11 @@ impl Request {
     /// `bolt_agent` is mandatory for Neo4j 5.x.
     #[must_use]
     pub fn hello(user_agent: &str) -> Self {
-        let lang = format!(
-            "Rust/{}",
-            option_env!("CARGO_PKG_RUST_VERSION").unwrap_or("stable")
-        );
+        let lang = format!("Rust/{}", option_env!("CARGO_PKG_RUST_VERSION").unwrap_or("stable"));
         let bolt_agent = string_map([("product", user_agent), ("language", &lang)]);
 
         let mut meta = HashMap::new();
-        meta.insert(
-            "user_agent".to_string(),
-            BoltValue::String(user_agent.to_string()),
-        );
+        meta.insert("user_agent".to_string(), BoltValue::String(user_agent.to_string()));
         meta.insert("bolt_agent".to_string(), BoltValue::Map(bolt_agent));
         Self::with_meta(HELLO, meta)
     }
@@ -135,11 +129,7 @@ impl Request {
         }
         Self::new(
             ROUTE,
-            vec![
-                BoltValue::Map(context),
-                BoltValue::List(vec![]),
-                BoltValue::Map(extra),
-            ],
+            vec![BoltValue::Map(context), BoltValue::List(vec![]), BoltValue::Map(extra)],
         )
     }
 
@@ -184,10 +174,7 @@ impl Response {
             FAILURE => {
                 let meta = take_map(fields.pop());
                 let get = |key, default: &str| {
-                    meta.get(key)
-                        .and_then(BoltValue::as_str)
-                        .unwrap_or(default)
-                        .to_string()
+                    meta.get(key).and_then(BoltValue::as_str).unwrap_or(default).to_string()
                 };
                 Some(Response::Failure {
                     code: get("code", "Unknown"),
@@ -208,8 +195,5 @@ fn take_map(field: Option<BoltValue>) -> HashMap<String, BoltValue> {
 
 /// Build a string-to-string metadata map.
 fn string_map<const N: usize>(pairs: [(&str, &str); N]) -> HashMap<String, BoltValue> {
-    pairs
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), BoltValue::String(v.to_string())))
-        .collect()
+    pairs.into_iter().map(|(k, v)| (k.to_string(), BoltValue::String(v.to_string()))).collect()
 }

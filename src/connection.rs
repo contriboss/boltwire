@@ -85,10 +85,7 @@ pub struct Auth {
 impl Auth {
     #[must_use]
     pub fn basic(principal: impl Into<String>, credentials: impl Into<String>) -> Self {
-        Self {
-            principal: principal.into(),
-            credentials: credentials.into(),
-        }
+        Self { principal: principal.into(), credentials: credentials.into() }
     }
 }
 
@@ -105,13 +102,7 @@ impl QueryResult {
     pub fn rows_as_maps(&self) -> Vec<HashMap<String, BoltValue>> {
         self.records
             .iter()
-            .map(|row| {
-                self.columns
-                    .iter()
-                    .cloned()
-                    .zip(row.iter().cloned())
-                    .collect()
-            })
+            .map(|row| self.columns.iter().cloned().zip(row.iter().cloned()).collect())
             .collect()
     }
 }
@@ -276,17 +267,14 @@ impl BoltConnection {
         parameters: HashMap<String, BoltValue>,
         extra: HashMap<String, BoltValue>,
     ) -> Result<(Vec<String>, Option<i64>)> {
-        self.write_message(&Request::run(query, parameters, extra))
-            .await?;
+        self.write_message(&Request::run(query, parameters, extra)).await?;
         match self.read_message().await? {
             Response::Success(meta) => {
                 let qid = meta.get("qid").and_then(BoltValue::as_int);
                 Ok((extract_columns(&meta), qid))
             }
             Response::Failure { code, message } => Err(self.fail_reset(code, message).await),
-            other => Err(BoltError::Protocol(format!(
-                "unexpected RUN response: {other:?}"
-            ))),
+            other => Err(BoltError::Protocol(format!("unexpected RUN response: {other:?}"))),
         }
     }
 
@@ -324,8 +312,7 @@ impl BoltConnection {
         parameters: HashMap<String, BoltValue>,
         batch: i64,
     ) -> Result<RecordStream<'_>> {
-        self.run_stream_with(query, parameters, HashMap::new(), batch)
-            .await
+        self.run_stream_with(query, parameters, HashMap::new(), batch).await
     }
 
     /// [`run_stream`](Self::run_stream) with an explicit `extra` map.
@@ -361,13 +348,9 @@ impl BoltConnection {
     pub async fn begin_with(&mut self, opts: TxOptions) -> Result<Transaction<'_>> {
         self.ensure_clean().await?;
         bolt_debug!("begin");
-        self.write_message(&Request::begin(opts.into_meta()))
-            .await?;
+        self.write_message(&Request::begin(opts.into_meta())).await?;
         expect_success(self.read_message().await?, "BEGIN")?;
-        Ok(Transaction {
-            conn: self,
-            done: false,
-        })
+        Ok(Transaction { conn: self, done: false })
     }
 
     /// Fetch the routing table (ROUTE). Single instances hold every role;
@@ -382,9 +365,7 @@ impl BoltConnection {
         match self.read_message().await? {
             Response::Success(meta) => RoutingTable::from_meta(&meta),
             Response::Failure { code, message } => Err(self.fail_reset(code, message).await),
-            other => Err(BoltError::Protocol(format!(
-                "unexpected ROUTE response: {other:?}"
-            ))),
+            other => Err(BoltError::Protocol(format!("unexpected ROUTE response: {other:?}"))),
         }
     }
 
@@ -418,10 +399,7 @@ impl BoltConnection {
         let mut body = Vec::new();
         // A message is itself a PackStream structure: signature + fields.
         packstream::pack(
-            &BoltValue::Structure {
-                signature: req.signature,
-                fields: req.fields.clone(),
-            },
+            &BoltValue::Structure { signature: req.signature, fields: req.fields.clone() },
             &mut body,
         )?;
 
@@ -471,9 +449,7 @@ impl BoltConnection {
 
         let value = Reader::new(&body).unpack()?;
         let BoltValue::Structure { signature, fields } = value else {
-            return Err(BoltError::Protocol(
-                "message body is not a structure".into(),
-            ));
+            return Err(BoltError::Protocol("message body is not a structure".into()));
         };
         Response::from_structure(signature, fields).ok_or_else(|| {
             BoltError::Protocol(format!("unknown message signature 0x{signature:02x}"))
@@ -527,9 +503,7 @@ impl Transaction<'_> {
     fn guard_open(&mut self) -> Result<()> {
         if self.conn.needs_reset {
             self.done = true;
-            return Err(BoltError::Protocol(
-                "stream abandoned mid-transaction; tx aborted".into(),
-            ));
+            return Err(BoltError::Protocol("stream abandoned mid-transaction; tx aborted".into()));
         }
         if self.done {
             return Err(BoltError::Protocol("transaction already closed".into()));
@@ -607,9 +581,7 @@ impl Transaction<'_> {
         match self.conn.read_message().await? {
             Response::Success(meta) => Ok(meta),
             Response::Failure { code, message } => Err(self.conn.fail_reset(code, message).await),
-            other => Err(BoltError::Protocol(format!(
-                "unexpected {ctx} response: {other:?}"
-            ))),
+            other => Err(BoltError::Protocol(format!("unexpected {ctx} response: {other:?}"))),
         }
     }
 }
@@ -656,17 +628,13 @@ impl RecordStream<'_> {
     }
 
     async fn fetch_batch(&mut self) -> Result<()> {
-        self.conn
-            .write_message(&Request::pull(self.batch, self.qid))
-            .await?;
+        self.conn.write_message(&Request::pull(self.batch, self.qid)).await?;
         loop {
             match self.conn.read_message().await? {
                 Response::Record(values) => self.buffer.push_back(values),
                 Response::Success(meta) => {
-                    self.has_more = meta
-                        .get("has_more")
-                        .and_then(BoltValue::as_bool)
-                        .unwrap_or(false);
+                    self.has_more =
+                        meta.get("has_more").and_then(BoltValue::as_bool).unwrap_or(false);
                     if !self.has_more {
                         self.summary = Some(meta);
                     }
@@ -694,9 +662,7 @@ impl RecordStream<'_> {
             return Ok(HashMap::new());
         }
         self.done = true;
-        self.conn
-            .write_message(&Request::discard(-1, self.qid))
-            .await?;
+        self.conn.write_message(&Request::discard(-1, self.qid)).await?;
         loop {
             match self.conn.read_message().await? {
                 Response::Success(meta) => return Ok(meta),
@@ -722,18 +688,14 @@ impl Drop for RecordStream<'_> {
 
 fn validate_batch(batch: i64) -> Result<()> {
     if batch == 0 || batch < -1 {
-        return Err(BoltError::Protocol(format!(
-            "invalid batch size {batch}; use -1 or >= 1"
-        )));
+        return Err(BoltError::Protocol(format!("invalid batch size {batch}; use -1 or >= 1")));
     }
     Ok(())
 }
 
 /// Read an optional string entry from a metadata map.
 fn meta_str(meta: &HashMap<String, BoltValue>, key: &str) -> Option<String> {
-    meta.get(key)
-        .and_then(BoltValue::as_str)
-        .map(ToString::to_string)
+    meta.get(key).and_then(BoltValue::as_str).map(ToString::to_string)
 }
 
 /// Require a SUCCESS reply, returning its metadata; map FAILURE/other into an
@@ -742,16 +704,12 @@ fn expect_success(response: Response, ctx: &str) -> Result<HashMap<String, BoltV
     match response {
         Response::Success(meta) => Ok(meta),
         Response::Failure { code, message } => Err(BoltError::Failure { code, message }),
-        other => Err(BoltError::Protocol(format!(
-            "unexpected {ctx} response: {other:?}"
-        ))),
+        other => Err(BoltError::Protocol(format!("unexpected {ctx} response: {other:?}"))),
     }
 }
 
 fn extract_columns(meta: &HashMap<String, BoltValue>) -> Vec<String> {
-    meta.get("fields")
-        .map(BoltValue::as_strings)
-        .unwrap_or_default()
+    meta.get("fields").map(BoltValue::as_strings).unwrap_or_default()
 }
 
 fn map_eof(e: std::io::Error) -> BoltError {
@@ -763,68 +721,4 @@ fn map_eof(e: std::io::Error) -> BoltError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn mem_conn(stream: tokio::io::DuplexStream) -> BoltConnection {
-        BoltConnection {
-            stream: Stream::Mem(stream),
-            version: Version::new(5, 8),
-            server_agent: None,
-            connection_id: None,
-            needs_reset: false,
-            read_timeout: DEFAULT_READ_TIMEOUT,
-        }
-    }
-
-    #[tokio::test]
-    async fn reader_skips_noop_keepalives() {
-        let (client, mut server) = tokio::io::duplex(256);
-        let mut conn = mem_conn(client);
-
-        // Two NOOPs, then a SUCCESS {} split across two chunks, then the
-        // end-of-message marker.
-        let success = [0xB1, crate::message::SUCCESS, 0xA0];
-        server.write_all(&[0x00, 0x00]).await.unwrap(); // NOOP
-        server.write_all(&[0x00, 0x00]).await.unwrap(); // NOOP
-        server.write_all(&[0x00, 0x01, success[0]]).await.unwrap();
-        server
-            .write_all(&[0x00, 0x02, success[1], success[2]])
-            .await
-            .unwrap();
-        server.write_all(&[0x00, 0x00]).await.unwrap(); // end of message
-
-        match conn.read_message().await.unwrap() {
-            Response::Success(meta) => assert!(meta.is_empty()),
-            other => panic!("expected SUCCESS, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn read_times_out_on_silent_server() {
-        let (client, _server) = tokio::io::duplex(64);
-        let mut conn = mem_conn(client);
-        conn.set_read_timeout(std::time::Duration::from_millis(50));
-        match conn.read_message().await {
-            Err(BoltError::Timeout("read")) => {}
-            other => panic!("expected read timeout, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn reader_reassembles_multi_chunk_message() {
-        let (client, mut server) = tokio::io::duplex(256);
-        let mut conn = mem_conn(client);
-
-        // RECORD [Int(1)] one byte per chunk: B1 71 91 01.
-        for b in [0xB1, crate::message::RECORD, 0x91, 0x01] {
-            server.write_all(&[0x00, 0x01, b]).await.unwrap();
-        }
-        server.write_all(&[0x00, 0x00]).await.unwrap();
-
-        match conn.read_message().await.unwrap() {
-            Response::Record(values) => assert_eq!(values, vec![BoltValue::Int(1)]),
-            other => panic!("expected RECORD, got {other:?}"),
-        }
-    }
-}
+mod test;

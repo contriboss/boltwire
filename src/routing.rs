@@ -24,7 +24,10 @@ impl RoutingTable {
 
         let mut table = RoutingTable {
             ttl_seconds: rt.get("ttl").and_then(BoltValue::as_int).unwrap_or(0),
-            db: rt.get("db").and_then(BoltValue::as_str).map(ToString::to_string),
+            db: rt
+                .get("db")
+                .and_then(BoltValue::as_str)
+                .map(ToString::to_string),
             ..Default::default()
         };
 
@@ -35,7 +38,10 @@ impl RoutingTable {
 
         for server in servers {
             let role = server.get("role").and_then(BoltValue::as_str).unwrap_or("");
-            let addresses = server.get("addresses").map(BoltValue::as_strings).unwrap_or_default();
+            let addresses = server
+                .get("addresses")
+                .map(BoltValue::as_strings)
+                .unwrap_or_default();
             match role {
                 "ROUTE" => table.routers.extend(addresses),
                 "READ" => table.readers.extend(addresses),

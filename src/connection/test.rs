@@ -22,7 +22,10 @@ async fn reader_skips_noop_keepalives() {
     server.write_all(&[0x00, 0x00]).await.unwrap(); // NOOP
     server.write_all(&[0x00, 0x00]).await.unwrap(); // NOOP
     server.write_all(&[0x00, 0x01, success[0]]).await.unwrap();
-    server.write_all(&[0x00, 0x02, success[1], success[2]]).await.unwrap();
+    server
+        .write_all(&[0x00, 0x02, success[1], success[2]])
+        .await
+        .unwrap();
     server.write_all(&[0x00, 0x00]).await.unwrap(); // end of message
 
     match conn.read_message().await.unwrap() {

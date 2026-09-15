@@ -65,7 +65,14 @@ pub fn pack(value: &BoltValue, out: &mut Vec<u8>) -> Result<()> {
         BoltValue::Map(map) => pack_map(map, out)?,
         BoltValue::Structure { signature, fields } => {
             // Structs are size-prefixed by field count, then the signature byte.
-            pack_header(fields.len(), TINY_STRUCT, STRUCT_8, STRUCT_16, "struct", out)?;
+            pack_header(
+                fields.len(),
+                TINY_STRUCT,
+                STRUCT_8,
+                STRUCT_16,
+                "struct",
+                out,
+            )?;
             out.push(*signature);
             pack_seq(fields, out)?;
         }
@@ -156,7 +163,9 @@ fn pack_header(
         // Markers are consecutive: m32 = m16 + 1 (D0/D1/D2, D4/D5/D6, D8/D9/DA).
         tagged(out, m16 + 1, &size32.to_be_bytes());
     } else {
-        return Err(BoltError::Protocol(format!("{label} too large to pack ({size})")));
+        return Err(BoltError::Protocol(format!(
+            "{label} too large to pack ({size})"
+        )));
     }
     Ok(())
 }
@@ -176,8 +185,10 @@ impl<'a> Reader<'a> {
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        let end =
-            self.pos.checked_add(n).ok_or_else(|| BoltError::Protocol("length overflow".into()))?;
+        let end = self
+            .pos
+            .checked_add(n)
+            .ok_or_else(|| BoltError::Protocol("length overflow".into()))?;
         if end > self.buf.len() {
             return Err(BoltError::Protocol(format!(
                 "unexpected end of stream: need {n} bytes at {}, have {}",
@@ -245,11 +256,15 @@ impl<'a> Reader<'a> {
             INT_8 => Ok(BoltValue::Int(i64::from(self.take(1)?[0] as i8))),
             INT_16 => {
                 let b = self.take(2)?;
-                Ok(BoltValue::Int(i64::from(i16::from_be_bytes(b.try_into().unwrap()))))
+                Ok(BoltValue::Int(i64::from(i16::from_be_bytes(
+                    b.try_into().unwrap(),
+                ))))
             }
             INT_32 => {
                 let b = self.take(4)?;
-                Ok(BoltValue::Int(i64::from(i32::from_be_bytes(b.try_into().unwrap()))))
+                Ok(BoltValue::Int(i64::from(i32::from_be_bytes(
+                    b.try_into().unwrap(),
+                ))))
             }
             INT_64 => {
                 let b = self.take(8)?;
@@ -270,7 +285,9 @@ impl<'a> Reader<'a> {
             STRUCT_8 => sized!(1, unpack_struct),
             STRUCT_16 => sized!(2, unpack_struct),
             STRUCT_32 => sized!(4, unpack_struct),
-            other => Err(BoltError::Protocol(format!("unknown PackStream marker: 0x{other:02x}"))),
+            other => Err(BoltError::Protocol(format!(
+                "unknown PackStream marker: 0x{other:02x}"
+            ))),
         }
     }
 
@@ -310,7 +327,9 @@ impl<'a> Reader<'a> {
             let key = match self.unpack()? {
                 BoltValue::String(s) => s.into_owned(),
                 other => {
-                    return Err(BoltError::Protocol(format!("map key not a string: {other:?}")));
+                    return Err(BoltError::Protocol(format!(
+                        "map key not a string: {other:?}"
+                    )));
                 }
             };
             map.insert(key, self.unpack()?);
@@ -320,7 +339,10 @@ impl<'a> Reader<'a> {
 
     fn unpack_struct(&mut self, n: usize) -> Result<BoltValue> {
         let signature = self.u8()?;
-        Ok(BoltValue::Structure { signature, fields: self.unpack_n(n)? })
+        Ok(BoltValue::Structure {
+            signature,
+            fields: self.unpack_n(n)?,
+        })
     }
 }
 

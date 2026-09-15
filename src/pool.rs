@@ -63,7 +63,13 @@ impl Pool {
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<BoltConnection>> + Send + 'static,
     {
-        Self::with_config(PoolConfig { max_size, ..PoolConfig::default() }, factory)
+        Self::with_config(
+            PoolConfig {
+                max_size,
+                ..PoolConfig::default()
+            },
+            factory,
+        )
     }
 
     pub fn with_config<F, Fut>(config: PoolConfig, factory: F) -> Self
@@ -192,7 +198,11 @@ impl Drop for PooledConnection {
             // try_lock: on contention the conn is dropped and the next
             // checkout mints a fresh one. Never blocks in Drop.
             if let Ok(mut idle) = self.inner.idle.try_lock() {
-                idle.push(Idle { conn, created_at: self.created_at, idled_at: Instant::now() });
+                idle.push(Idle {
+                    conn,
+                    created_at: self.created_at,
+                    idled_at: Instant::now(),
+                });
             }
         }
     }

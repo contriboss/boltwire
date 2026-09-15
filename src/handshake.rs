@@ -26,7 +26,10 @@ impl Version {
     /// Decode the server's 4-byte agreed-version reply.
     #[must_use]
     pub const fn decode(bytes: [u8; 4]) -> Self {
-        Self { major: bytes[3], minor: bytes[2] }
+        Self {
+            major: bytes[3],
+            minor: bytes[2],
+        }
     }
 
     #[must_use]

@@ -6,7 +6,11 @@ async fn mint_backs_off_and_counts_attempts() {
     let attempts = Arc::new(AtomicU32::new(0));
     let seen = attempts.clone();
     let pool = Pool::with_config(
-        PoolConfig { max_size: 1, connect_attempts: 3, ..PoolConfig::default() },
+        PoolConfig {
+            max_size: 1,
+            connect_attempts: 3,
+            ..PoolConfig::default()
+        },
         move || {
             seen.fetch_add(1, Ordering::SeqCst);
             async { Err::<BoltConnection, _>(BoltError::Closed("down".into())) }

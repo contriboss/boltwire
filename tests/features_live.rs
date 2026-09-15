@@ -18,7 +18,9 @@ fn config() -> Option<(String, Option<Auth>)> {
 
 async fn connect() -> BoltConnection {
     let (addr, auth) = config().expect("BOLT_ADDR unset");
-    BoltConnection::connect(addr, auth).await.expect("connect failed")
+    BoltConnection::connect(addr, auth)
+        .await
+        .expect("connect failed")
 }
 
 fn is_neo4j(conn: &BoltConnection) -> bool {
@@ -38,8 +40,12 @@ async fn tx_commit_persists() {
     cleanup(&mut conn, "TxCommit").await;
 
     let mut tx = conn.begin().await.unwrap();
-    tx.run("CREATE (:TxCommit {n: 1})", HashMap::new()).await.unwrap();
-    tx.run("CREATE (:TxCommit {n: 2})", HashMap::new()).await.unwrap();
+    tx.run("CREATE (:TxCommit {n: 1})", HashMap::new())
+        .await
+        .unwrap();
+    tx.run("CREATE (:TxCommit {n: 2})", HashMap::new())
+        .await
+        .unwrap();
     let bookmark = tx.commit().await.unwrap();
     eprintln!("commit bookmark: {bookmark:?}");
 
@@ -55,7 +61,9 @@ async fn tx_rollback_discards() {
     cleanup(&mut conn, "TxRollback").await;
 
     let mut tx = conn.begin().await.unwrap();
-    tx.run("CREATE (:TxRollback {n: 1})", HashMap::new()).await.unwrap();
+    tx.run("CREATE (:TxRollback {n: 1})", HashMap::new())
+        .await
+        .unwrap();
     tx.rollback().await.unwrap();
 
     assert_eq!(count(&mut conn, "TxRollback").await, 0);
@@ -70,7 +78,9 @@ async fn tx_drop_aborts() {
 
     {
         let mut tx = conn.begin().await.unwrap();
-        tx.run("CREATE (:TxDrop {n: 1})", HashMap::new()).await.unwrap();
+        tx.run("CREATE (:TxDrop {n: 1})", HashMap::new())
+            .await
+            .unwrap();
         // dropped without commit
     }
 
@@ -100,8 +110,13 @@ async fn tx_read_only_option() {
     let Some(_) = config() else { return };
     let mut conn = connect().await;
     // Memgraph ignores mode; Neo4j routes/validates it. Either way BEGIN must succeed.
-    let mut tx =
-        conn.begin_with(TxOptions { read_only: true, ..Default::default() }).await.unwrap();
+    let mut tx = conn
+        .begin_with(TxOptions {
+            read_only: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     let r = tx.run("RETURN 42 AS n", HashMap::new()).await.unwrap();
     assert_eq!(r.records[0][0], BoltValue::Int(42));
     tx.commit().await.unwrap();
@@ -158,11 +173,20 @@ async fn tx_stream_with_qid() {
     cleanup(&mut conn, "TxStream").await;
 
     let mut tx = conn.begin().await.unwrap();
-    tx.run("UNWIND range(1, 500) AS x CREATE (:TxStream {n: x})", HashMap::new()).await.unwrap();
+    tx.run(
+        "UNWIND range(1, 500) AS x CREATE (:TxStream {n: x})",
+        HashMap::new(),
+    )
+    .await
+    .unwrap();
 
     // First cursor: stream uncommitted rows in batches.
     let mut stream = tx
-        .run_stream("MATCH (t:TxStream) RETURN t.n ORDER BY t.n", HashMap::new(), 64)
+        .run_stream(
+            "MATCH (t:TxStream) RETURN t.n ORDER BY t.n",
+            HashMap::new(),
+            64,
+        )
         .await
         .unwrap();
     let mut seen = 0i64;
@@ -175,8 +199,10 @@ async fn tx_stream_with_qid() {
     assert_eq!((seen, last), (500, 500));
 
     // Second sequential cursor in the same tx, abandoned early via finish().
-    let mut stream =
-        tx.run_stream("MATCH (t:TxStream) RETURN t.n", HashMap::new(), 10).await.unwrap();
+    let mut stream = tx
+        .run_stream("MATCH (t:TxStream) RETURN t.n", HashMap::new(), 10)
+        .await
+        .unwrap();
     assert!(stream.next().await.unwrap().is_some());
     stream.finish().await.unwrap();
 
@@ -187,7 +213,9 @@ async fn tx_stream_with_qid() {
 
 async fn count(conn: &mut BoltConnection, label: &str) -> i64 {
     let q = format!("MATCH (n:{label}) RETURN count(n) AS c");
-    conn.run(&q, HashMap::new()).await.unwrap().records[0][0].as_int().unwrap()
+    conn.run(&q, HashMap::new()).await.unwrap().records[0][0]
+        .as_int()
+        .unwrap()
 }
 
 #[tokio::test]
@@ -195,7 +223,10 @@ async fn node_view_on_live_row() {
     let Some(_) = config() else { return };
     let mut conn = connect().await;
     cleanup(&mut conn, "ViewTest").await;
-    let r = conn.run("CREATE (v:ViewTest {k: 9}) RETURN v", HashMap::new()).await.unwrap();
+    let r = conn
+        .run("CREATE (v:ViewTest {k: 9}) RETURN v", HashMap::new())
+        .await
+        .unwrap();
     let node = r.records[0][0].as_node().expect("row should view as node");
     assert!(node.label_strs().contains(&"ViewTest"));
     assert_eq!(node.prop("k").and_then(BoltValue::as_int), Some(9));
@@ -209,8 +240,10 @@ async fn stream_batches_all_records() {
     let mut conn = connect().await;
 
     // 10000 rows through 256-row batches: forces ~40 PULL round-trips.
-    let mut stream =
-        conn.run_stream("UNWIND range(1, 10000) AS x RETURN x", HashMap::new(), 256).await.unwrap();
+    let mut stream = conn
+        .run_stream("UNWIND range(1, 10000) AS x RETURN x", HashMap::new(), 256)
+        .await
+        .unwrap();
     assert_eq!(stream.columns(), ["x"]);
 
     let (mut count, mut sum) = (0i64, 0i64);
@@ -228,8 +261,10 @@ async fn stream_batches_all_records() {
 async fn stream_batch_of_one() {
     let Some(_) = config() else { return };
     let mut conn = connect().await;
-    let mut stream =
-        conn.run_stream("UNWIND range(1, 5) AS x RETURN x", HashMap::new(), 1).await.unwrap();
+    let mut stream = conn
+        .run_stream("UNWIND range(1, 5) AS x RETURN x", HashMap::new(), 1)
+        .await
+        .unwrap();
     let mut seen = Vec::new();
     while let Some(row) = stream.next().await.unwrap() {
         seen.push(row[0].as_int().unwrap());
@@ -243,8 +278,10 @@ async fn stream_batch_of_one() {
 async fn stream_finish_discards_remainder() {
     let Some(_) = config() else { return };
     let mut conn = connect().await;
-    let mut stream =
-        conn.run_stream("UNWIND range(1, 100000) AS x RETURN x", HashMap::new(), 10).await.unwrap();
+    let mut stream = conn
+        .run_stream("UNWIND range(1, 100000) AS x RETURN x", HashMap::new(), 10)
+        .await
+        .unwrap();
     // Take three, abandon the other 99,997 politely.
     for _ in 0..3 {
         assert!(stream.next().await.unwrap().is_some());
@@ -345,12 +382,17 @@ async fn managed_tx_retries_and_threads_bookmarks() {
         .await
         .unwrap();
     assert_eq!(n, 1);
-    assert!(!pool.bookmarks().await.is_empty(), "commit bookmark must be captured");
+    assert!(
+        !pool.bookmarks().await.is_empty(),
+        "commit bookmark must be captured"
+    );
 
     let hits = pool
         .execute_read(|tx| {
             Box::pin(async move {
-                let r = tx.run("MATCH (c:RetryTest {id: 1}) RETURN c.hits", HashMap::new()).await?;
+                let r = tx
+                    .run("MATCH (c:RetryTest {id: 1}) RETURN c.hits", HashMap::new())
+                    .await?;
                 Ok(r.records[0][0].as_int().unwrap())
             })
         })
@@ -360,7 +402,8 @@ async fn managed_tx_retries_and_threads_bookmarks() {
 
     pool.execute_write(|tx| {
         Box::pin(async move {
-            tx.run("MATCH (c:RetryTest) DELETE c", HashMap::new()).await?;
+            tx.run("MATCH (c:RetryTest) DELETE c", HashMap::new())
+                .await?;
             Ok(())
         })
     })

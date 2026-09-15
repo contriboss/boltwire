@@ -96,7 +96,12 @@ fn list_at<'a, T>(
     i: usize,
     view: impl Fn(&'a BoltValue) -> Option<T>,
 ) -> Option<Vec<T>> {
-    fields.get(i).and_then(BoltValue::as_list)?.iter().map(view).collect()
+    fields
+        .get(i)
+        .and_then(BoltValue::as_list)?
+        .iter()
+        .map(view)
+        .collect()
 }
 
 impl BoltValue {
@@ -184,10 +189,20 @@ impl BoltValue {
     #[must_use]
     pub fn as_point(&self) -> Option<PointRef> {
         if let Some(f) = fields_of(self, sig::POINT_2D) {
-            return Some(PointRef { srid: int(f, 0)?, x: float(f, 1)?, y: float(f, 2)?, z: None });
+            return Some(PointRef {
+                srid: int(f, 0)?,
+                x: float(f, 1)?,
+                y: float(f, 2)?,
+                z: None,
+            });
         }
         let f = fields_of(self, sig::POINT_3D)?;
-        Some(PointRef { srid: int(f, 0)?, x: float(f, 1)?, y: float(f, 2)?, z: Some(float(f, 3)?) })
+        Some(PointRef {
+            srid: int(f, 0)?,
+            x: float(f, 1)?,
+            y: float(f, 2)?,
+            z: Some(float(f, 3)?),
+        })
     }
 }
 

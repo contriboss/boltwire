@@ -51,21 +51,46 @@ fn path_view() {
 
 #[test]
 fn temporal_views() {
-    let date = BoltValue::Structure { signature: sig::DATE, fields: vec![BoltValue::Int(20_000)] };
+    let date = BoltValue::Structure {
+        signature: sig::DATE,
+        fields: vec![BoltValue::Int(20_000)],
+    };
     assert_eq!(date.as_date_days(), Some(20_000));
 
     let dur = BoltValue::Structure {
         signature: sig::DURATION,
-        fields: vec![BoltValue::Int(0), BoltValue::Int(2), BoltValue::Int(30), BoltValue::Int(500)],
+        fields: vec![
+            BoltValue::Int(0),
+            BoltValue::Int(2),
+            BoltValue::Int(30),
+            BoltValue::Int(500),
+        ],
     };
     assert_eq!(
         dur.as_duration(),
-        Some(DurationRef { months: 0, days: 2, seconds: 30, nanoseconds: 500 })
+        Some(DurationRef {
+            months: 0,
+            days: 2,
+            seconds: 30,
+            nanoseconds: 500
+        })
     );
 
     let pt = BoltValue::Structure {
         signature: sig::POINT_2D,
-        fields: vec![BoltValue::Int(4326), BoltValue::Float(1.5), BoltValue::Float(2.5)],
+        fields: vec![
+            BoltValue::Int(4326),
+            BoltValue::Float(1.5),
+            BoltValue::Float(2.5),
+        ],
     };
-    assert_eq!(pt.as_point(), Some(PointRef { srid: 4326, x: 1.5, y: 2.5, z: None }));
+    assert_eq!(
+        pt.as_point(),
+        Some(PointRef {
+            srid: 4326,
+            x: 1.5,
+            y: 2.5,
+            z: None
+        })
+    );
 }

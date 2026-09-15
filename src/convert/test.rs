@@ -49,11 +49,26 @@ fn rows_as_deserializes_by_column() {
         ],
     };
     let rows: Vec<Row> = result.rows_as().unwrap();
-    assert_eq!(rows, vec![Row { n: 1, s: "x".into() }, Row { n: 2, s: "y".into() }]);
+    assert_eq!(
+        rows,
+        vec![
+            Row {
+                n: 1,
+                s: "x".into()
+            },
+            Row {
+                n: 2,
+                s: "y".into()
+            }
+        ]
+    );
 }
 
 #[test]
 fn structures_refuse_flat_deserialization() {
-    let v = BoltValue::Structure { signature: 0x4E, fields: vec![] };
+    let v = BoltValue::Structure {
+        signature: 0x4E,
+        fields: vec![],
+    };
     assert!(from_value::<String>(v).is_err());
 }

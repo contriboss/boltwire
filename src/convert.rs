@@ -48,7 +48,9 @@ pub fn to_value<T: Serialize>(value: &T) -> Result<BoltValue> {
 pub fn params<T: Serialize>(value: &T) -> Result<HashMap<String, BoltValue>> {
     match to_value(value)? {
         BoltValue::Map(m) => Ok(m),
-        other => Err(ser::Error::custom(format!("parameters must be a map, got {other:?}"))),
+        other => Err(ser::Error::custom(format!(
+            "parameters must be a map, got {other:?}"
+        ))),
     }
 }
 
@@ -98,7 +100,9 @@ impl ser::Serializer for ValueSerializer {
     }
 
     fn serialize_u64(self, v: u64) -> Result<BoltValue> {
-        i64::try_from(v).map(BoltValue::Int).map_err(|_| ser::Error::custom("u64 out of i64 range"))
+        i64::try_from(v)
+            .map(BoltValue::Int)
+            .map_err(|_| ser::Error::custom("u64 out of i64 range"))
     }
 
     fn serialize_f32(self, v: f32) -> Result<BoltValue> {
@@ -167,7 +171,9 @@ impl ser::Serializer for ValueSerializer {
     }
 
     fn serialize_seq(self, len: Option<usize>) -> Result<SeqSer> {
-        Ok(SeqSer { items: Vec::with_capacity(len.unwrap_or(0)) })
+        Ok(SeqSer {
+            items: Vec::with_capacity(len.unwrap_or(0)),
+        })
     }
 
     fn serialize_tuple(self, len: usize) -> Result<SeqSer> {
@@ -185,11 +191,17 @@ impl ser::Serializer for ValueSerializer {
         variant: &'static str,
         len: usize,
     ) -> Result<VariantSeqSer> {
-        Ok(VariantSeqSer { variant, items: Vec::with_capacity(len) })
+        Ok(VariantSeqSer {
+            variant,
+            items: Vec::with_capacity(len),
+        })
     }
 
     fn serialize_map(self, len: Option<usize>) -> Result<MapSer> {
-        Ok(MapSer { map: HashMap::with_capacity(len.unwrap_or(0)), key: None })
+        Ok(MapSer {
+            map: HashMap::with_capacity(len.unwrap_or(0)),
+            key: None,
+        })
     }
 
     fn serialize_struct(self, _name: &'static str, len: usize) -> Result<MapSer> {
@@ -203,7 +215,10 @@ impl ser::Serializer for ValueSerializer {
         variant: &'static str,
         len: usize,
     ) -> Result<VariantMapSer> {
-        Ok(VariantMapSer { variant, map: HashMap::with_capacity(len) })
+        Ok(VariantMapSer {
+            variant,
+            map: HashMap::with_capacity(len),
+        })
     }
 }
 
@@ -287,12 +302,17 @@ impl ser::SerializeMap for MapSer {
                 self.key = Some(s.into_owned());
                 Ok(())
             }
-            other => Err(ser::Error::custom(format!("map key must be a string, got {other:?}"))),
+            other => Err(ser::Error::custom(format!(
+                "map key must be a string, got {other:?}"
+            ))),
         }
     }
 
     fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<()> {
-        let key = self.key.take().ok_or_else(|| ser::Error::custom("value before key"))?;
+        let key = self
+            .key
+            .take()
+            .ok_or_else(|| ser::Error::custom("value before key"))?;
         self.map.insert(key, value.serialize(ValueSerializer)?);
         Ok(())
     }
@@ -311,7 +331,8 @@ impl ser::SerializeStruct for MapSer {
         key: &'static str,
         value: &T,
     ) -> Result<()> {
-        self.map.insert(key.to_string(), value.serialize(ValueSerializer)?);
+        self.map
+            .insert(key.to_string(), value.serialize(ValueSerializer)?);
         Ok(())
     }
 
@@ -334,7 +355,8 @@ impl ser::SerializeStructVariant for VariantMapSer {
         key: &'static str,
         value: &T,
     ) -> Result<()> {
-        self.map.insert(key.to_string(), value.serialize(ValueSerializer)?);
+        self.map
+            .insert(key.to_string(), value.serialize(ValueSerializer)?);
         Ok(())
     }
 
@@ -396,7 +418,9 @@ impl<'de> de::Deserializer<'de> for BoltValue {
                     de::value::MapDeserializer::new(map.into_iter()),
                 ))
             }
-            other => Err(de::Error::custom(format!("cannot deserialize enum from {other:?}"))),
+            other => Err(de::Error::custom(format!(
+                "cannot deserialize enum from {other:?}"
+            ))),
         }
     }
 

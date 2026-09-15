@@ -70,7 +70,9 @@ impl RustlsProviderBuilder {
                 .dangerous()
                 .with_custom_certificate_verifier(Arc::new(NoVerification::new()))
         } else {
-            let mut roots = RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+            let mut roots = RootCertStore {
+                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            };
             if self.native_roots {
                 for cert in rustls_native_certs::load_native_certs().certs {
                     roots.add(cert).ok();
@@ -103,7 +105,9 @@ impl RustlsProviderBuilder {
             None => builder.with_no_client_auth(),
         };
 
-        Ok(RustlsProvider { connector: TlsConnector::from(Arc::new(config)) })
+        Ok(RustlsProvider {
+            connector: TlsConnector::from(Arc::new(config)),
+        })
     }
 }
 
@@ -130,7 +134,9 @@ struct NoVerification {
 
 impl NoVerification {
     fn new() -> Self {
-        Self { provider: ring::default_provider() }
+        Self {
+            provider: ring::default_provider(),
+        }
     }
 }
 
@@ -152,7 +158,12 @@ impl ServerCertVerifier for NoVerification {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> std::result::Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn verify_tls13_signature(
@@ -161,10 +172,17 @@ impl ServerCertVerifier for NoVerification {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> std::result::Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider.signature_verification_algorithms.supported_schemes()
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }

@@ -74,8 +74,9 @@ impl Config {
 
         let (auth, hostport) = match rest.rsplit_once('@') {
             Some((userinfo, hp)) => {
-                let (user, pass) =
-                    userinfo.split_once(':').ok_or_else(|| err("userinfo needs user:pass"))?;
+                let (user, pass) = userinfo
+                    .split_once(':')
+                    .ok_or_else(|| err("userinfo needs user:pass"))?;
                 (Some(Auth::basic(user, pass)), hp)
             }
             None => (None, rest),
@@ -83,7 +84,9 @@ impl Config {
 
         // `[::1]:7687` style IPv6 first, then plain host[:port].
         let (host, port) = if let Some(rest) = hostport.strip_prefix('[') {
-            let (h, after) = rest.split_once(']').ok_or_else(|| err("unclosed IPv6 bracket"))?;
+            let (h, after) = rest
+                .split_once(']')
+                .ok_or_else(|| err("unclosed IPv6 bracket"))?;
             let port = match after.strip_prefix(':') {
                 Some(p) => p.parse::<u16>().map_err(|_| err("bad port"))?,
                 None if after.is_empty() => 7687,
@@ -101,10 +104,17 @@ impl Config {
         }
 
         let db = query.and_then(|q| {
-            q.split('&').find_map(|kv| kv.strip_prefix("db=").map(ToString::to_string))
+            q.split('&')
+                .find_map(|kv| kv.strip_prefix("db=").map(ToString::to_string))
         });
 
-        Ok(Self { scheme, host: host.to_string(), port, auth, db })
+        Ok(Self {
+            scheme,
+            host: host.to_string(),
+            port,
+            auth,
+            db,
+        })
     }
 
     #[must_use]
@@ -124,7 +134,13 @@ impl Config {
                 "neo4j:// schemes are routed; use Config::routed_pool".into(),
             ));
         }
-        dial(self.scheme.tls(), &self.addr(), &self.host, self.auth.clone()).await
+        dial(
+            self.scheme.tls(),
+            &self.addr(),
+            &self.host,
+            self.auth.clone(),
+        )
+        .await
     }
 
     /// Routed pool over the cluster behind a `neo4j*` URI (a `bolt*` URI just
@@ -133,13 +149,21 @@ impl Config {
     pub fn routed_pool(&self, max_per_host: usize) -> RoutedPool {
         let tls = self.scheme.tls();
         let auth = self.auth.clone();
-        RoutedPool::new(vec![self.addr()], self.db.clone(), max_per_host, move |server| {
-            let auth = auth.clone();
-            async move {
-                let host = server.rsplit_once(':').map_or(server.as_str(), |(h, _)| h).to_string();
-                dial(tls, &server, &host, auth).await
-            }
-        })
+        RoutedPool::new(
+            vec![self.addr()],
+            self.db.clone(),
+            max_per_host,
+            move |server| {
+                let auth = auth.clone();
+                async move {
+                    let host = server
+                        .rsplit_once(':')
+                        .map_or(server.as_str(), |(h, _)| h)
+                        .to_string();
+                    dial(tls, &server, &host, auth).await
+                }
+            },
+        )
     }
 }
 
@@ -160,7 +184,9 @@ async fn dial(tls: Tls, addr: &str, host: &str, auth: Option<Auth>) -> Result<Bo
         #[cfg(not(feature = "tls-rustls"))]
         Tls::Strict | Tls::AcceptInvalid => {
             let _ = (addr, host);
-            Err(BoltError::Protocol("TLS scheme requires the tls-rustls feature".into()))
+            Err(BoltError::Protocol(
+                "TLS scheme requires the tls-rustls feature".into(),
+            ))
         }
     }
 }

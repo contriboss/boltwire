@@ -22,7 +22,9 @@ fn config() -> Option<(String, Option<Auth>)> {
 
 async fn connect() -> BoltConnection {
     let (addr, auth) = config().expect("BOLT_ADDR unset");
-    BoltConnection::connect(addr, auth).await.expect("connect failed")
+    BoltConnection::connect(addr, auth)
+        .await
+        .expect("connect failed")
 }
 
 #[tokio::test]
@@ -32,9 +34,16 @@ async fn handshake_and_scalar_query() {
         return;
     };
     let mut conn = connect().await;
-    eprintln!("negotiated Bolt {}, server={:?}", conn.version(), conn.server_agent());
+    eprintln!(
+        "negotiated Bolt {}, server={:?}",
+        conn.version(),
+        conn.server_agent()
+    );
 
-    let result = conn.run("RETURN 1 AS n", HashMap::new()).await.expect("query failed");
+    let result = conn
+        .run("RETURN 1 AS n", HashMap::new())
+        .await
+        .expect("query failed");
     assert_eq!(result.columns, vec!["n".to_string()]);
     assert_eq!(result.records.len(), 1);
     assert_eq!(result.records[0][0], BoltValue::Int(1));
@@ -55,11 +64,17 @@ async fn parameterized_query_and_types() {
     params.insert("n".to_string(), BoltValue::Int(42));
 
     let result = conn
-        .run("RETURN $name AS name, $n AS n, [1, 2.5, true, null] AS mixed", params)
+        .run(
+            "RETURN $name AS name, $n AS n, [1, 2.5, true, null] AS mixed",
+            params,
+        )
         .await
         .expect("query failed");
 
-    assert_eq!(result.columns, vec!["name".to_string(), "n".to_string(), "mixed".to_string()]);
+    assert_eq!(
+        result.columns,
+        vec!["name".to_string(), "n".to_string(), "mixed".to_string()]
+    );
     let row = &result.records[0];
     assert_eq!(row[0], BoltValue::String("Neo".into()));
     assert_eq!(row[1], BoltValue::Int(42));
@@ -85,13 +100,20 @@ async fn node_structure_roundtrip() {
 
     // Create then read back a node; it arrives as a PackStream Structure.
     let result = conn
-        .run("CREATE (p:Person {name: 'Trinity'}) RETURN p", HashMap::new())
+        .run(
+            "CREATE (p:Person {name: 'Trinity'}) RETURN p",
+            HashMap::new(),
+        )
         .await
         .expect("query failed");
 
     match &result.records[0][0] {
         BoltValue::Structure { signature, fields } => {
-            assert_eq!(*signature, boltwire::value::sig::NODE, "expected Node signature");
+            assert_eq!(
+                *signature,
+                boltwire::value::sig::NODE,
+                "expected Node signature"
+            );
             assert!(!fields.is_empty(), "node should carry id/labels/props");
             eprintln!("node fields: {fields:?}");
         }
@@ -99,9 +121,12 @@ async fn node_structure_roundtrip() {
     }
 
     // Clean up so reruns stay deterministic.
-    conn.run("MATCH (p:Person {name: 'Trinity'}) DELETE p", HashMap::new())
-        .await
-        .expect("cleanup failed");
+    conn.run(
+        "MATCH (p:Person {name: 'Trinity'}) DELETE p",
+        HashMap::new(),
+    )
+    .await
+    .expect("cleanup failed");
     conn.close().await.expect("close failed");
 }
 
@@ -112,7 +137,10 @@ async fn bad_cypher_surfaces_failure() {
         return;
     };
     let mut conn = connect().await;
-    let err = conn.run("THIS IS NOT CYPHER", HashMap::new()).await.unwrap_err();
+    let err = conn
+        .run("THIS IS NOT CYPHER", HashMap::new())
+        .await
+        .unwrap_err();
     match err {
         boltwire::BoltError::Failure { code, message } => {
             eprintln!("expected failure surfaced: {code} - {message}");
@@ -120,7 +148,10 @@ async fn bad_cypher_surfaces_failure() {
         other => panic!("expected Failure, got {other:?}"),
     }
     // Connection must remain usable after a handled failure (RESET worked).
-    let ok = conn.run("RETURN 1 AS n", HashMap::new()).await.expect("post-failure query failed");
+    let ok = conn
+        .run("RETURN 1 AS n", HashMap::new())
+        .await
+        .expect("post-failure query failed");
     assert_eq!(ok.records[0][0], BoltValue::Int(1));
     conn.close().await.expect("close failed");
 }

@@ -21,13 +21,21 @@ fn cfg() -> Option<Cfg> {
         (Ok(u), Ok(p)) => Some(Auth::basic(u, p)),
         _ => None,
     };
-    Some(Cfg { addr, server_name, ca_pem, auth })
+    Some(Cfg {
+        addr,
+        server_name,
+        ca_pem,
+        auth,
+    })
 }
 
 #[tokio::test]
 async fn strict_with_pinned_root() {
     let Some(c) = cfg() else { return };
-    let tls = RustlsProvider::builder().add_root_pem(&c.ca_pem).build().unwrap();
+    let tls = RustlsProvider::builder()
+        .add_root_pem(&c.ca_pem)
+        .build()
+        .unwrap();
 
     let mut conn = BoltConnection::connect_tls(&c.addr, &c.server_name, c.auth, &tls)
         .await
@@ -56,15 +64,23 @@ async fn strict_without_root_fails() {
 #[tokio::test]
 async fn insecure_accepts_self_signed() {
     let Some(c) = cfg() else { return };
-    let tls = RustlsProvider::builder().danger_accept_invalid_certs(true).build().unwrap();
+    let tls = RustlsProvider::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
 
     let mut conn = BoltConnection::connect_tls(&c.addr, &c.server_name, c.auth, &tls)
         .await
         .expect("insecure TLS should connect");
 
-    let result = conn.run("CREATE (p:TlsTest {ok: true}) RETURN p", HashMap::new()).await.unwrap();
+    let result = conn
+        .run("CREATE (p:TlsTest {ok: true}) RETURN p", HashMap::new())
+        .await
+        .unwrap();
     assert!(matches!(result.records[0][0], BoltValue::Structure { .. }));
-    conn.run("MATCH (p:TlsTest) DELETE p", HashMap::new()).await.unwrap();
+    conn.run("MATCH (p:TlsTest) DELETE p", HashMap::new())
+        .await
+        .unwrap();
     conn.close().await.unwrap();
 }
 
@@ -78,7 +94,10 @@ async fn mtls_requires_and_accepts_client_identity() {
     let key = std::fs::read(std::env::var("BOLT_TLS_CLIENT_KEY").unwrap()).unwrap();
 
     // Without identity: stunnel must refuse the handshake or kill the socket.
-    let bare = RustlsProvider::builder().add_root_pem(&c.ca_pem).build().unwrap();
+    let bare = RustlsProvider::builder()
+        .add_root_pem(&c.ca_pem)
+        .build()
+        .unwrap();
     assert!(
         BoltConnection::connect_tls(&mtls_addr, &c.server_name, c.auth.clone(), &bare)
             .await

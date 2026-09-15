@@ -68,7 +68,10 @@ fn collections_roundtrip() {
 fn structure_roundtrip() {
     let node = BoltValue::Structure {
         signature: crate::value::sig::NODE,
-        fields: vec![BoltValue::Int(42), BoltValue::List(vec![BoltValue::String("Person".into())])],
+        fields: vec![
+            BoltValue::Int(42),
+            BoltValue::List(vec![BoltValue::String("Person".into())]),
+        ],
     };
     assert_eq!(roundtrip(&node), node);
 }
@@ -138,9 +141,15 @@ mod fuzz_smoke {
     fn mutated_valid_encodings_never_panic() {
         let mut base = Vec::new();
         let mut map = HashMap::new();
-        map.insert("k".to_string(), BoltValue::List(vec![BoltValue::Int(1); 20]));
+        map.insert(
+            "k".to_string(),
+            BoltValue::List(vec![BoltValue::Int(1); 20]),
+        );
         pack(
-            &BoltValue::Structure { signature: 0x70, fields: vec![BoltValue::Map(map)] },
+            &BoltValue::Structure {
+                signature: 0x70,
+                fields: vec![BoltValue::Map(map)],
+            },
             &mut base,
         )
         .unwrap();

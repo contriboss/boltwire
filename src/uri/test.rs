@@ -13,7 +13,10 @@ fn parses_full_uri() {
 #[test]
 fn defaults_port_and_optionals() {
     let c = Config::from_uri("bolt://localhost").unwrap();
-    assert_eq!((c.port, c.auth.is_none(), c.db.is_none()), (7687, true, true));
+    assert_eq!(
+        (c.port, c.auth.is_none(), c.db.is_none()),
+        (7687, true, true)
+    );
 }
 
 #[test]

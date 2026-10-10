@@ -12,7 +12,7 @@ strip = true
 name = "boltwire"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.98"
+rust-version = "1.99"
 authors = ["Abdelkader Boudih <oss@seuros.com>"]
 description = "Async Bolt protocol driver for Neo4j and Memgraph"
 readme = "README.md"
@@ -30,7 +30,7 @@ tracing = ["dep:tracing"]
 [dependencies]
 tokio = { version = "1.47", features = ["net", "io-util", "rt", "macros", "time", "sync"] }
 thiserror = "2.0"
-chrono-machines = "0.4"
+chrono-machines = "0.8.1"
 rand = "0.10"
 serde = { version = "1.0", optional = true }
 tracing = { version = "0.1", optional = true }

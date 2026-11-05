@@ -7,6 +7,9 @@ fn mem_conn(stream: tokio::io::DuplexStream) -> BoltConnection {
         server_agent: None,
         connection_id: None,
         needs_reset: false,
+        pending: 0,
+        broken: false,
+        rbuf: Vec::new(),
         read_timeout: DEFAULT_READ_TIMEOUT,
     }
 }

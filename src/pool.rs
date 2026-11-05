@@ -106,7 +106,7 @@ impl Pool {
                 continue;
             }
             let mut conn = idle.conn;
-            if conn.reset().await.is_ok() {
+            if conn.is_reusable() && conn.reset().await.is_ok() {
                 return Ok(self.wrap(conn, idle.created_at, permit));
             }
         }
@@ -160,7 +160,9 @@ impl Pool {
     }
 }
 
-/// A checked-out connection; returns to the pool on drop.
+/// A checked-out connection; returns to the pool on drop if it is still
+/// usable. One dropped with a reply outstanding (its query was cancelled) or
+/// with its framing lost is closed instead.
 pub struct PooledConnection {
     conn: Option<BoltConnection>,
     created_at: Instant,
@@ -195,6 +197,10 @@ impl DerefMut for PooledConnection {
 impl Drop for PooledConnection {
     fn drop(&mut self) {
         if let Some(conn) = self.conn.take() {
+            if !conn.is_reusable() {
+                bolt_debug!("discarding a connection left mid-exchange");
+                return;
+            }
             // try_lock: on contention the conn is dropped and the next
             // checkout mints a fresh one. Never blocks in Drop.
             if let Ok(mut idle) = self.inner.idle.try_lock() {

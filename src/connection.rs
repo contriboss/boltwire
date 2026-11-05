@@ -9,7 +9,7 @@ use tokio::net::{TcpStream, ToSocketAddrs};
 
 use crate::error::{BoltError, Result};
 use crate::handshake::{self, Version};
-use crate::message::{Request, Response};
+use crate::message::{GOODBYE, Request, Response};
 use crate::packstream::{self, Reader};
 use crate::routing::RoutingTable;
 #[cfg(feature = "tls")]
@@ -20,6 +20,8 @@ const MAX_CHUNK: usize = 65_535;
 /// Upper bound on a single reassembled message; a server streaming past this
 /// is broken or hostile.
 const MAX_MESSAGE: usize = 64 * 1024 * 1024;
+/// Read granularity; also the size the read buffer shrinks back to.
+const READ_CHUNK: usize = 8 * 1024;
 
 /// Whole connect sequence: dial + handshake + HELLO + LOGON.
 pub const DEFAULT_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
@@ -117,14 +119,30 @@ impl QueryResult {
 }
 
 /// One Bolt session per socket. Single-plex: one query at a time.
+///
+/// Cancellation-safe: dropping any operation's future mid-flight never
+/// desynchronizes the session. Bytes already received stay buffered, replies
+/// still owed are counted, and the next operation RESETs and drains exactly
+/// those before going on. A request cut off mid-write cannot be repaired;
+/// that marks the connection [broken](Self::is_broken) and later operations
+/// fail instead of sending more bytes.
 pub struct BoltConnection {
     stream: Stream,
     version: Version,
     server_agent: Option<String>,
     connection_id: Option<String>,
-    /// Set when a Transaction was dropped without commit/rollback; the next
-    /// operation sends RESET first (which aborts the abandoned tx).
+    /// The session may not be READY: set before every exchange and cleared
+    /// only when it completes cleanly, and set when a Transaction or
+    /// RecordStream is dropped unfinished. The next operation RESETs first.
     needs_reset: bool,
+    /// Requests sent whose summary (SUCCESS/FAILURE/IGNORED) is still unread.
+    pending: usize,
+    /// Framing lost (write cut mid-frame, transport error, undecodable
+    /// message). Nothing more may be sent or read.
+    broken: bool,
+    /// Received bytes not yet consumed as a whole message. Reads only ever
+    /// append here, so a cancelled read loses nothing.
+    rbuf: Vec<u8>,
     read_timeout: std::time::Duration,
 }
 
@@ -171,6 +189,9 @@ impl BoltConnection {
             server_agent: None,
             connection_id: None,
             needs_reset: false,
+            pending: 0,
+            broken: false,
+            rbuf: Vec::with_capacity(READ_CHUNK),
             read_timeout: DEFAULT_READ_TIMEOUT,
         };
         conn.handshake().await?;
@@ -190,13 +211,46 @@ impl BoltConnection {
         Ok(conn)
     }
 
-    /// RESET if a prior transaction was abandoned (dropped mid-flight).
+    /// RESET if a prior exchange did not finish cleanly (cancelled, failed,
+    /// or a transaction/stream dropped mid-flight).
     async fn ensure_clean(&mut self) -> Result<()> {
-        if self.needs_reset {
+        self.check_intact()?;
+        if self.needs_reset || self.pending > 0 {
             self.reset().await?;
-            self.needs_reset = false;
         }
         Ok(())
+    }
+
+    fn check_intact(&self) -> Result<()> {
+        if self.broken {
+            return Err(BoltError::Closed(
+                "connection is broken (an exchange was cut off mid-frame or the transport failed)"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The framing is lost: a request was cut off mid-write, the transport
+    /// failed, or the server sent something undecodable. A broken connection
+    /// cannot be recovered; drop it.
+    #[must_use]
+    pub fn is_broken(&self) -> bool {
+        self.broken
+    }
+
+    /// The session is idle and in sync: no reply outstanding, nothing
+    /// abandoned. A connection that is neither ready nor broken is recovered
+    /// by [`reset`](Self::reset), which the next operation does on its own.
+    #[must_use]
+    pub fn is_ready(&self) -> bool {
+        !self.broken && !self.needs_reset && self.pending == 0
+    }
+
+    /// Worth keeping in a pool: intact and owing no replies, so a RESET on
+    /// checkout answers at once (an abandoned tx or stream is fine).
+    pub(crate) fn is_reusable(&self) -> bool {
+        !self.broken && self.pending == 0
     }
 
     #[must_use]
@@ -215,11 +269,13 @@ impl BoltConnection {
     }
 
     async fn handshake(&mut self) -> Result<()> {
-        self.stream.write_all(&handshake::client_hello()).await?;
-        self.stream.flush().await?;
+        self.write_bytes(&handshake::client_hello()).await?;
 
-        let mut agreed = [0u8; 4];
-        self.read_exact_timed(&mut agreed).await?;
+        while self.rbuf.len() < 4 {
+            self.fill().await?;
+        }
+        let agreed: [u8; 4] = self.rbuf[..4].try_into().expect("four bytes buffered");
+        self.rbuf.drain(..4);
         let version = Version::decode(agreed);
 
         if version.is_zero() || !handshake::supported(version) {
@@ -265,7 +321,12 @@ impl BoltConnection {
         extra: HashMap<String, BoltValue>,
     ) -> Result<QueryResult> {
         self.ensure_clean().await?;
-        self.run_inner(query, parameters, extra).await
+        self.needs_reset = true;
+        let result = self.run_inner(query, parameters, extra).await;
+        if result.is_ok() {
+            self.needs_reset = false;
+        }
+        result
     }
 
     /// Send RUN, await SUCCESS, return the column names and stream `qid`
@@ -338,6 +399,8 @@ impl BoltConnection {
     ) -> Result<RecordStream<'_>> {
         validate_batch(batch)?;
         self.ensure_clean().await?;
+        // Stays set while the stream is open; cleared once it is drained.
+        self.needs_reset = true;
         let (columns, qid) = self.send_run(query, parameters, extra).await?;
         Ok(RecordStream {
             conn: self,
@@ -361,9 +424,11 @@ impl BoltConnection {
     pub async fn begin_with(&mut self, opts: TxOptions) -> Result<Transaction<'_>> {
         self.ensure_clean().await?;
         bolt_debug!("begin");
+        self.needs_reset = true;
         self.write_message(&Request::begin(opts.into_meta()))
             .await?;
         expect_success(self.read_message().await?, "BEGIN")?;
+        self.needs_reset = false;
         Ok(Transaction {
             conn: self,
             done: false,
@@ -378,9 +443,13 @@ impl BoltConnection {
         db: Option<&str>,
     ) -> Result<RoutingTable> {
         self.ensure_clean().await?;
+        self.needs_reset = true;
         self.write_message(&Request::route(context, db)).await?;
         match self.read_message().await? {
-            Response::Success(meta) => RoutingTable::from_meta(&meta),
+            Response::Success(meta) => {
+                self.needs_reset = false;
+                RoutingTable::from_meta(&meta)
+            }
             Response::Failure { code, message } => Err(self.fail_reset(code, message).await),
             other => Err(BoltError::Protocol(format!(
                 "unexpected ROUTE response: {other:?}"
@@ -388,26 +457,34 @@ impl BoltConnection {
         }
     }
 
-    /// Send RESET and await SUCCESS. Clears failed state and aborts any open tx.
+    /// Send RESET and await its SUCCESS. Clears failed state and aborts any
+    /// open tx. Replies still owed to earlier requests (a cancelled query's,
+    /// say) are drained first, so none of them is mistaken for RESET's.
     pub async fn reset(&mut self) -> Result<()> {
         self.write_message(&Request::reset()).await?;
         loop {
-            match self.read_message().await? {
+            let response = self.read_message().await?;
+            if self.pending > 0 {
+                continue; // an earlier request's reply (or one of its records)
+            }
+            return match response {
                 Response::Success(_) => {
                     self.needs_reset = false;
-                    return Ok(());
+                    Ok(())
                 }
-                Response::Ignored | Response::Record(_) => {}
-                Response::Failure { code, message } => {
-                    return Err(BoltError::Failure { code, message });
-                }
-            }
+                Response::Failure { code, message } => Err(BoltError::Failure { code, message }),
+                other => Err(BoltError::Protocol(format!(
+                    "unexpected RESET response: {other:?}"
+                ))),
+            };
         }
     }
 
-    /// Send GOODBYE and close the socket.
+    /// Send GOODBYE (unless the connection is broken) and close the socket.
     pub async fn close(mut self) -> Result<()> {
-        self.write_message(&Request::goodbye()).await?;
+        if !self.broken {
+            self.write_message(&Request::goodbye()).await?;
+        }
         self.stream.shutdown().await?;
         Ok(())
     }
@@ -415,70 +492,148 @@ impl BoltConnection {
     // ---- framing ----
 
     async fn write_message(&mut self, req: &Request) -> Result<()> {
-        let mut body = Vec::new();
-        // A message is itself a PackStream structure: signature + fields.
-        packstream::pack(
-            &BoltValue::Structure {
-                signature: req.signature,
-                fields: req.fields.clone(),
-            },
-            &mut body,
-        )?;
+        self.write_messages(std::slice::from_ref(req)).await
+    }
 
-        // Chunk the body (16-bit length-prefixed segments), then a zero terminator.
-        for chunk in body.chunks(MAX_CHUNK) {
-            let len = u16::try_from(chunk.len()).unwrap();
-            self.stream.write_all(&len.to_be_bytes()).await?;
-            self.stream.write_all(chunk).await?;
+    /// Frame every request into one buffer and send it in one go.
+    async fn write_messages(&mut self, reqs: &[Request]) -> Result<()> {
+        self.check_intact()?;
+        let mut out = Vec::new();
+        for req in reqs {
+            encode(req, &mut out)?;
         }
-        self.stream.write_all(&[0x00, 0x00]).await?;
-        self.stream.flush().await?;
+        self.write_bytes(&out).await?;
+        self.pending += reqs.iter().filter(|r| r.signature != GOODBYE).count();
         Ok(())
     }
 
-    async fn read_exact_timed(&mut self, buf: &mut [u8]) -> Result<()> {
-        tokio::time::timeout(self.read_timeout, self.stream.read_exact(buf))
-            .await
-            .map_err(|_| BoltError::Timeout("read"))?
-            .map_err(map_eof)?;
+    /// Write raw bytes. Cut off midway (cancelled or failed), the peer holds
+    /// part of a frame: the connection is broken until this completes.
+    async fn write_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        self.broken = true;
+        self.stream.write_all(bytes).await?;
+        self.stream.flush().await?;
+        self.broken = false;
         Ok(())
+    }
+
+    /// Append whatever the socket has to the read buffer. Cancellation-safe:
+    /// `read_buf` either appends or does nothing.
+    async fn fill(&mut self) -> Result<()> {
+        if self.rbuf.is_empty() && self.rbuf.capacity() > MAX_CHUNK * 4 {
+            self.rbuf.shrink_to(READ_CHUNK); // don't pin a huge message's buffer
+        }
+        self.rbuf.reserve(READ_CHUNK);
+        let read = tokio::time::timeout(self.read_timeout, self.stream.read_buf(&mut self.rbuf))
+            .await
+            .map_err(|_| BoltError::Timeout("read"))?;
+        match read {
+            Ok(0) => {
+                self.broken = true;
+                Err(BoltError::Closed(if self.rbuf.is_empty() {
+                    "connection closed by server".into()
+                } else {
+                    "connection closed mid-message".into()
+                }))
+            }
+            Ok(_) => Ok(()),
+            Err(e) => {
+                self.broken = true;
+                Err(BoltError::Io(e))
+            }
+        }
+    }
+
+    /// Cut the next whole message out of the read buffer, if it is all there.
+    /// Leading `0x0000` NOOP keep-alives are skipped.
+    fn take_message(&mut self) -> Result<Option<Vec<u8>>> {
+        let noops = self
+            .rbuf
+            .chunks_exact(2)
+            .take_while(|pair| *pair == [0, 0])
+            .count();
+        self.rbuf.drain(..noops * 2);
+
+        // Walk chunk headers to the terminator without copying.
+        let mut pos = 0;
+        let mut total = 0;
+        loop {
+            let Some(header) = self.rbuf.get(pos..pos + 2) else {
+                return Ok(None);
+            };
+            let size = usize::from(u16::from_be_bytes([header[0], header[1]]));
+            if size == 0 {
+                break;
+            }
+            total += size;
+            if total > MAX_MESSAGE {
+                self.broken = true;
+                return Err(BoltError::Protocol("message exceeds 64MiB limit".into()));
+            }
+            pos += 2 + size;
+            if self.rbuf.len() < pos {
+                return Ok(None);
+            }
+        }
+
+        let mut body = Vec::with_capacity(total);
+        let mut at = 0;
+        while at < pos {
+            let size = usize::from(u16::from_be_bytes([self.rbuf[at], self.rbuf[at + 1]]));
+            body.extend_from_slice(&self.rbuf[at + 2..at + 2 + size]);
+            at += 2 + size;
+        }
+        self.rbuf.drain(..pos + 2);
+        Ok(Some(body))
     }
 
     async fn read_message(&mut self) -> Result<Response> {
-        let mut body = Vec::new();
-        loop {
-            let mut header = [0u8; 2];
-            self.read_exact_timed(&mut header).await?;
-            let size = usize::from(u16::from_be_bytes(header));
-            if size == 0 {
-                // 0x0000 with an empty body is a keep-alive NOOP, not a
-                // message boundary; skip it.
-                if body.is_empty() {
-                    continue;
-                }
-                break;
+        self.check_intact()?;
+        let body = loop {
+            if let Some(body) = self.take_message()? {
+                break body;
             }
-            let start = body.len();
-            if start + size > MAX_MESSAGE {
-                return Err(BoltError::Protocol("message exceeds 64MiB limit".into()));
-            }
-            body.resize(start + size, 0);
-            let mut chunk = std::mem::take(&mut body);
-            let read = self.read_exact_timed(&mut chunk[start..]).await;
-            body = chunk;
-            read?;
-        }
-
-        let value = Reader::new(&body).unpack()?;
-        let BoltValue::Structure { signature, fields } = value else {
-            return Err(BoltError::Protocol(
-                "message body is not a structure".into(),
-            ));
+            self.fill().await?;
         };
-        Response::from_structure(signature, fields).ok_or_else(|| {
-            BoltError::Protocol(format!("unknown message signature 0x{signature:02x}"))
-        })
+        let response = decode(&body).inspect_err(|_| self.broken = true)?;
+        if !matches!(response, Response::Record(_)) {
+            self.pending = self.pending.saturating_sub(1);
+        }
+        Ok(response)
     }
+}
+
+/// Append `req` to `out` as a chunked Bolt message.
+fn encode(req: &Request, out: &mut Vec<u8>) -> Result<()> {
+    let mut body = Vec::new();
+    // A message is itself a PackStream structure: signature + fields.
+    packstream::pack(
+        &BoltValue::Structure {
+            signature: req.signature,
+            fields: req.fields.clone(),
+        },
+        &mut body,
+    )?;
+    // Chunk the body (16-bit length-prefixed segments), then a zero terminator.
+    out.reserve(body.len() + body.len() / MAX_CHUNK * 2 + 4);
+    for chunk in body.chunks(MAX_CHUNK) {
+        let len = u16::try_from(chunk.len()).expect("chunks are at most MAX_CHUNK");
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(chunk);
+    }
+    out.extend_from_slice(&[0x00, 0x00]);
+    Ok(())
+}
+
+fn decode(body: &[u8]) -> Result<Response> {
+    let value = Reader::new(body).unpack()?;
+    let BoltValue::Structure { signature, fields } = value else {
+        return Err(BoltError::Protocol(
+            "message body is not a structure".into(),
+        ));
+    };
+    Response::from_structure(signature, fields)
+        .ok_or_else(|| BoltError::Protocol(format!("unknown message signature 0x{signature:02x}")))
 }
 
 /// Options for [`BoltConnection::begin_with`].
@@ -525,10 +680,13 @@ pub struct Transaction<'c> {
 
 impl Transaction<'_> {
     fn guard_open(&mut self) -> Result<()> {
+        self.conn.check_intact()?;
         if self.conn.needs_reset {
             self.done = true;
             return Err(BoltError::Protocol(
-                "stream abandoned mid-transaction; tx aborted".into(),
+                "an earlier statement did not finish (cancelled, or its stream \
+                 dropped); tx aborted"
+                    .into(),
             ));
         }
         if self.done {
@@ -545,10 +703,12 @@ impl Transaction<'_> {
         parameters: HashMap<String, BoltValue>,
     ) -> Result<QueryResult> {
         self.guard_open()?;
+        self.conn.needs_reset = true;
         let result = self.conn.run_inner(query, parameters, HashMap::new()).await;
-        if result.is_err() {
+        match result {
+            Ok(_) => self.conn.needs_reset = false,
             // fail_reset already RESET the server, which killed the tx.
-            self.done = true;
+            Err(_) => self.done = true,
         }
         result
     }
@@ -563,6 +723,8 @@ impl Transaction<'_> {
     ) -> Result<RecordStream<'_>> {
         validate_batch(batch)?;
         self.guard_open()?;
+        // Stays set while the stream is open; cleared once it is drained.
+        self.conn.needs_reset = true;
         let run = self.conn.send_run(query, parameters, HashMap::new()).await;
         let (columns, qid) = match run {
             Ok(ok) => ok,
@@ -587,8 +749,10 @@ impl Transaction<'_> {
     pub async fn commit(mut self) -> Result<Option<String>> {
         self.guard_open()?;
         self.done = true;
+        self.conn.needs_reset = true;
         self.conn.write_message(&Request::commit()).await?;
         let meta = self.finish_end("COMMIT").await?;
+        self.conn.needs_reset = false;
         Ok(meta_str(&meta, "bookmark"))
     }
 
@@ -598,8 +762,10 @@ impl Transaction<'_> {
             return Ok(());
         }
         self.done = true;
+        self.conn.needs_reset = true;
         self.conn.write_message(&Request::rollback()).await?;
         self.finish_end("ROLLBACK").await?;
+        self.conn.needs_reset = false;
         Ok(())
     }
 
@@ -669,6 +835,7 @@ impl RecordStream<'_> {
                         .unwrap_or(false);
                     if !self.has_more {
                         self.summary = Some(meta);
+                        self.conn.needs_reset = false; // drained: session READY
                     }
                     return Ok(());
                 }
@@ -699,7 +866,10 @@ impl RecordStream<'_> {
             .await?;
         loop {
             match self.conn.read_message().await? {
-                Response::Success(meta) => return Ok(meta),
+                Response::Success(meta) => {
+                    self.conn.needs_reset = false;
+                    return Ok(meta);
+                }
                 Response::Record(_) => {}
                 Response::Failure { code, message } => {
                     return Err(self.conn.fail_reset(code, message).await);
@@ -752,14 +922,6 @@ fn extract_columns(meta: &HashMap<String, BoltValue>) -> Vec<String> {
     meta.get("fields")
         .map(BoltValue::as_strings)
         .unwrap_or_default()
-}
-
-fn map_eof(e: std::io::Error) -> BoltError {
-    if e.kind() == std::io::ErrorKind::UnexpectedEof {
-        BoltError::Closed("connection closed mid-message".into())
-    } else {
-        BoltError::Io(e)
-    }
 }
 
 #[cfg(test)]

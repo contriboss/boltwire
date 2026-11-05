@@ -4,11 +4,11 @@
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use chrono_machines::{BackoffStrategy, ExponentialBackoff};
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::connection::BoltConnection;
 use crate::error::{BoltError, Result};
@@ -52,8 +52,18 @@ pub struct Pool {
 struct PoolInner {
     factory: Box<Factory>,
     config: PoolConfig,
+    /// A plain mutex: held only to push or pop, never across an await, so
+    /// `Drop` can always take it instead of giving the connection up.
     idle: Mutex<Vec<Idle>>,
     permits: Arc<Semaphore>,
+}
+
+impl PoolInner {
+    fn idle(&self) -> MutexGuard<'_, Vec<Idle>> {
+        // Push/pop cannot leave the Vec inconsistent; a panic elsewhere while
+        // holding the lock poisons nothing that matters.
+        self.idle.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 impl Pool {
@@ -99,7 +109,7 @@ impl Pool {
             .map_err(|_| BoltError::Closed("pool closed".into()))?;
 
         loop {
-            let Some(idle) = self.inner.idle.lock().await.pop() else {
+            let Some(idle) = self.inner.idle().pop() else {
                 break;
             };
             if self.expired(idle.created_at, idle.idled_at) {
@@ -201,15 +211,11 @@ impl Drop for PooledConnection {
                 bolt_debug!("discarding a connection left mid-exchange");
                 return;
             }
-            // try_lock: on contention the conn is dropped and the next
-            // checkout mints a fresh one. Never blocks in Drop.
-            if let Ok(mut idle) = self.inner.idle.try_lock() {
-                idle.push(Idle {
-                    conn,
-                    created_at: self.created_at,
-                    idled_at: Instant::now(),
-                });
-            }
+            self.inner.idle().push(Idle {
+                conn,
+                created_at: self.created_at,
+                idled_at: Instant::now(),
+            });
         }
     }
 }

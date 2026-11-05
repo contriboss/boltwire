@@ -329,16 +329,24 @@ impl BoltConnection {
         result
     }
 
-    /// Send RUN, await SUCCESS, return the column names and stream `qid`
-    /// (servers only assign qids inside explicit transactions).
-    async fn send_run(
+    /// Send RUN and a `PULL {n}` together, then await RUN's SUCCESS: one
+    /// round trip instead of two. Returns the column names and stream `qid`
+    /// (servers only assign qids inside explicit transactions). The PULL's
+    /// replies are left for the caller. If RUN fails, the server IGNOREs the
+    /// PULL and `fail_reset` drains that before its RESET.
+    async fn send_run_pull(
         &mut self,
         query: &str,
         parameters: HashMap<String, BoltValue>,
         extra: HashMap<String, BoltValue>,
+        n: i64,
     ) -> Result<(Vec<String>, Option<i64>)> {
-        self.write_message(&Request::run(query, parameters, extra))
-            .await?;
+        // PULL without a qid targets the statement just opened.
+        self.write_messages(&[
+            Request::run(query, parameters, extra),
+            Request::pull(n, None),
+        ])
+        .await?;
         match self.read_message().await? {
             Response::Success(meta) => {
                 let qid = meta.get("qid").and_then(BoltValue::as_int);
@@ -351,7 +359,8 @@ impl BoltConnection {
         }
     }
 
-    /// RUN + PULL, no state checks. Shared by autocommit and explicit tx.
+    /// RUN + PULL (pipelined), no state checks. Shared by autocommit and
+    /// explicit tx.
     async fn run_inner(
         &mut self,
         query: &str,
@@ -359,9 +368,8 @@ impl BoltConnection {
         extra: HashMap<String, BoltValue>,
     ) -> Result<QueryResult> {
         bolt_debug!(query, "run");
-        let (columns, qid) = self.send_run(query, parameters, extra).await?;
+        let (columns, _) = self.send_run_pull(query, parameters, extra, -1).await?;
 
-        self.write_message(&Request::pull(-1, qid)).await?;
         let mut records = Vec::new();
         loop {
             match self.read_message().await? {
@@ -401,7 +409,7 @@ impl BoltConnection {
         self.ensure_clean().await?;
         // Stays set while the stream is open; cleared once it is drained.
         self.needs_reset = true;
-        let (columns, qid) = self.send_run(query, parameters, extra).await?;
+        let (columns, qid) = self.send_run_pull(query, parameters, extra, batch).await?;
         Ok(RecordStream {
             conn: self,
             columns,
@@ -409,6 +417,7 @@ impl BoltConnection {
             batch,
             buffer: VecDeque::new(),
             has_more: true,
+            pull_in_flight: true,
             done: false,
             summary: None,
         })
@@ -725,7 +734,10 @@ impl Transaction<'_> {
         self.guard_open()?;
         // Stays set while the stream is open; cleared once it is drained.
         self.conn.needs_reset = true;
-        let run = self.conn.send_run(query, parameters, HashMap::new()).await;
+        let run = self
+            .conn
+            .send_run_pull(query, parameters, HashMap::new(), batch)
+            .await;
         let (columns, qid) = match run {
             Ok(ok) => ok,
             Err(e) => {
@@ -740,6 +752,7 @@ impl Transaction<'_> {
             batch,
             buffer: VecDeque::new(),
             has_more: true,
+            pull_in_flight: true,
             done: false,
             summary: None,
         })
@@ -797,6 +810,9 @@ pub struct RecordStream<'c> {
     batch: i64,
     buffer: VecDeque<Vec<BoltValue>>,
     has_more: bool,
+    /// A PULL was sent and its summary is unread (true from the start: the
+    /// first batch is pipelined with RUN).
+    pull_in_flight: bool,
     done: bool,
     summary: Option<HashMap<String, BoltValue>>,
 }
@@ -822,13 +838,17 @@ impl RecordStream<'_> {
     }
 
     async fn fetch_batch(&mut self) -> Result<()> {
-        self.conn
-            .write_message(&Request::pull(self.batch, self.qid))
-            .await?;
+        if !self.pull_in_flight {
+            self.conn
+                .write_message(&Request::pull(self.batch, self.qid))
+                .await?;
+            self.pull_in_flight = true;
+        }
         loop {
             match self.conn.read_message().await? {
                 Response::Record(values) => self.buffer.push_back(values),
                 Response::Success(meta) => {
+                    self.pull_in_flight = false;
                     self.has_more = meta
                         .get("has_more")
                         .and_then(BoltValue::as_bool)
@@ -859,6 +879,15 @@ impl RecordStream<'_> {
         }
         if self.done {
             return Ok(HashMap::new());
+        }
+        if self.pull_in_flight {
+            // Collect the pipelined batch's summary before deciding.
+            self.fetch_batch().await?;
+            self.buffer.clear();
+            if let Some(summary) = self.summary.take() {
+                self.done = true;
+                return Ok(summary);
+            }
         }
         self.done = true;
         self.conn

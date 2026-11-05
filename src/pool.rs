@@ -24,6 +24,7 @@ pub struct PoolConfig {
     /// Connections older than this are recycled instead of reused.
     pub max_lifetime: Option<Duration>,
     /// Connect attempts before giving up (exponential backoff between tries).
+    /// Only [transient](BoltError::is_transient) errors are retried.
     pub connect_attempts: u8,
 }
 
@@ -140,6 +141,8 @@ impl Pool {
         loop {
             match (self.inner.factory)().await {
                 Ok(conn) => return Ok(conn),
+                // Bad credentials, TLS or config: retrying only delays the error.
+                Err(e) if !e.is_transient() => return Err(e),
                 Err(e) => {
                     let delay = backoff.delay(attempt, &mut rand::rng());
                     match delay {

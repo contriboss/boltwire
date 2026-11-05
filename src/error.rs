@@ -33,4 +33,32 @@ pub enum BoltError {
     Timeout(&'static str),
 }
 
+impl BoltError {
+    /// Worth retrying: the server or network may recover (refused or dropped
+    /// connection, timeout, a server `TransientError`).
+    ///
+    /// Everything else is permanent, and retrying only delays the error:
+    /// rejected credentials and other client errors, a TLS failure (an
+    /// untrusted certificate, a bad server name), a version mismatch, a
+    /// protocol violation or a configuration error.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        use std::io::ErrorKind;
+        match self {
+            Self::Io(e) => !matches!(
+                e.kind(),
+                ErrorKind::InvalidInput
+                    | ErrorKind::InvalidData
+                    | ErrorKind::PermissionDenied
+                    | ErrorKind::Unsupported
+            ),
+            Self::Closed(_) | Self::Timeout(_) => true,
+            Self::Failure { code, .. } => code.contains("TransientError"),
+            Self::Protocol(_) | Self::Version { .. } => false,
+            #[cfg(feature = "tls")]
+            Self::Tls(_) => false,
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, BoltError>;

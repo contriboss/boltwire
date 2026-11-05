@@ -21,11 +21,7 @@ type ConnectFn =
 const RETRY_ATTEMPTS: u8 = 3;
 
 fn is_transient(e: &BoltError) -> bool {
-    match e {
-        BoltError::Io(_) | BoltError::Closed(_) | BoltError::Timeout(_) => true,
-        BoltError::Failure { code, .. } => code.contains("TransientError") || cluster_moved(e),
-        _ => false,
-    }
+    e.is_transient() || cluster_moved(e)
 }
 
 /// Cluster reshaped under us; the routing table is stale.
@@ -274,6 +270,8 @@ impl RoutedPool {
                 let addr = &addrs[(start + i) % addrs.len()];
                 match self.pool_for(addr).await.get().await {
                     Ok(conn) => return Ok(conn),
+                    // Credentials or TLS setup at fault, not the server.
+                    Err(e) if !e.is_transient() => return Err(e),
                     Err(_) => self.evict(addr).await,
                 }
             }

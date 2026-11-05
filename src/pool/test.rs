@@ -37,3 +37,26 @@ async fn expiry_rules() {
     assert!(pool.expired(old, now)); // lived too long
     assert!(!pool.expired(now, now)); // fresh
 }
+
+#[tokio::test]
+async fn mint_fails_fast_on_permanent_errors() {
+    let attempts = Arc::new(AtomicU32::new(0));
+    let seen = attempts.clone();
+    let pool = Pool::with_config(
+        PoolConfig {
+            max_size: 1,
+            connect_attempts: 5,
+            ..PoolConfig::default()
+        },
+        move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+            async {
+                Err::<BoltConnection, _>(BoltError::Protocol(
+                    "TLS scheme requires the tls-rustls feature".into(),
+                ))
+            }
+        },
+    );
+    assert!(matches!(pool.get().await, Err(BoltError::Protocol(_))));
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}

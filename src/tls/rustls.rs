@@ -124,11 +124,16 @@ impl TlsProvider for RustlsProvider {
         Box::pin(async move {
             let name = ServerName::try_from(server_name.to_string())
                 .map_err(|e| BoltError::Tls(format!("invalid server name {server_name:?}: {e}")))?;
-            let stream = self
-                .connector
-                .connect(name, tcp)
-                .await
-                .map_err(|e| BoltError::Tls(format!("handshake with {server_name}: {e}")))?;
+            let stream = self.connector.connect(name, tcp).await.map_err(|e| {
+                // tokio-rustls reports TLS-level failures (untrusted cert,
+                // bad name, no common cipher) as InvalidData; anything else
+                // is the transport dropping mid-handshake, which is transient.
+                if e.kind() == std::io::ErrorKind::InvalidData {
+                    BoltError::Tls(format!("handshake with {server_name}: {e}"))
+                } else {
+                    BoltError::Io(e)
+                }
+            })?;
             Ok(Box::new(stream) as Box<dyn BoltStream>)
         })
     }

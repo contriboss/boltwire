@@ -60,6 +60,21 @@ let pool = Pool::new(8, move || {
 let mut conn = pool.get().await?;    // returns to the pool on drop
 ```
 
+Bound checkouts and shut down cleanly:
+
+```rust
+let pool = Pool::new(8, connect_fn).with_acquire_timeout(Duration::from_secs(5));
+// ... get() now fails with BoltError::Timeout instead of waiting forever
+pool.close().await;                  // GOODBYE to idle connections; later get()s fail
+```
+
+Cancellation is safe. Drop a query's future at any point (`tokio::time::timeout`,
+`select!`) and the connection either recovers with a RESET on its next use or,
+if a request was cut off mid-write, reports `is_broken()`. The pool only takes
+back connections owing no replies, and closes the rest. Connect errors that
+retrying can't fix (bad credentials, TLS, config) fail at once rather than
+after the backoff; see `BoltError::is_transient`.
+
 Cluster-aware, when your servers come in herds:
 
 ```rust

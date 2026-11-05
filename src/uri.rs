@@ -82,26 +82,8 @@ impl Config {
             None => (None, rest),
         };
 
-        // `[::1]:7687` style IPv6 first, then plain host[:port].
-        let (host, port) = if let Some(rest) = hostport.strip_prefix('[') {
-            let (h, after) = rest
-                .split_once(']')
-                .ok_or_else(|| err("unclosed IPv6 bracket"))?;
-            let port = match after.strip_prefix(':') {
-                Some(p) => p.parse::<u16>().map_err(|_| err("bad port"))?,
-                None if after.is_empty() => 7687,
-                None => return Err(err("junk after IPv6 host")),
-            };
-            (h, port)
-        } else {
-            match hostport.rsplit_once(':') {
-                Some((h, p)) => (h, p.parse::<u16>().map_err(|_| err("bad port"))?),
-                None => (hostport, 7687),
-            }
-        };
-        if host.is_empty() {
-            return Err(err("empty host"));
-        }
+        let (host, port) = split_host_port(hostport).map_err(|m| err(m))?;
+        let port = port.unwrap_or(7687);
 
         let db = query.and_then(|q| {
             q.split('&')
@@ -156,15 +138,41 @@ impl Config {
             move |server| {
                 let auth = auth.clone();
                 async move {
-                    let host = server
-                        .rsplit_once(':')
-                        .map_or(server.as_str(), |(h, _)| h)
-                        .to_string();
-                    dial(tls, &server, &host, auth).await
+                    // Routing tables write IPv6 as `[::1]:7687`; the TLS
+                    // server name is the bare `::1`.
+                    let (host, _) = split_host_port(&server).map_err(|m| {
+                        BoltError::Protocol(format!("invalid server address {server:?}: {m}"))
+                    })?;
+                    dial(tls, &server, host, auth).await
                 }
             },
         )
     }
+}
+
+/// Split `host[:port]` or `[ipv6][:port]` into the bare host (brackets
+/// stripped) and the port, if any. Unbracketed IPv6 is ambiguous and refused.
+fn split_host_port(hostport: &str) -> std::result::Result<(&str, Option<u16>), &'static str> {
+    let parse_port = |p: &str| p.parse::<u16>().map_err(|_| "bad port");
+    let (host, port) = if let Some(rest) = hostport.strip_prefix('[') {
+        let (host, after) = rest.split_once(']').ok_or("unclosed IPv6 bracket")?;
+        let port = match after.strip_prefix(':') {
+            Some(p) => Some(parse_port(p)?),
+            None if after.is_empty() => None,
+            None => return Err("junk after IPv6 host"),
+        };
+        (host, port)
+    } else {
+        match hostport.split_once(':') {
+            Some((_, p)) if p.contains(':') => return Err("IPv6 hosts need [brackets]"),
+            Some((host, p)) => (host, Some(parse_port(p)?)),
+            None => (hostport, None),
+        }
+    };
+    if host.is_empty() {
+        return Err("empty host");
+    }
+    Ok((host, port))
 }
 
 async fn dial(tls: Tls, addr: &str, host: &str, auth: Option<Auth>) -> Result<BoltConnection> {

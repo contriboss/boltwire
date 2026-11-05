@@ -42,3 +42,23 @@ fn rejects_garbage() {
     assert!(Config::from_uri("bolt://host:notaport").is_err());
     assert!(Config::from_uri("no-scheme").is_err());
 }
+
+#[test]
+fn rejects_unbracketed_ipv6() {
+    assert!(Config::from_uri("bolt://::1").is_err());
+    assert!(Config::from_uri("bolt://fe80::1:7687").is_err());
+}
+
+#[test]
+fn splits_routing_table_addresses() {
+    assert_eq!(split_host_port("[::1]:7687"), Ok(("::1", Some(7687))));
+    assert_eq!(split_host_port("[fe80::1]"), Ok(("fe80::1", None)));
+    assert_eq!(
+        split_host_port("core1.example:7687"),
+        Ok(("core1.example", Some(7687)))
+    );
+    assert_eq!(split_host_port("10.0.0.5"), Ok(("10.0.0.5", None)));
+    assert!(split_host_port("[::1]x").is_err());
+    assert!(split_host_port("::1:7687").is_err());
+    assert!(split_host_port(":7687").is_err());
+}

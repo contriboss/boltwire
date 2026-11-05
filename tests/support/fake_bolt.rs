@@ -11,7 +11,8 @@
 //! - `rows:<n>:...`      stream `<n>` rows (honouring PULL's `n`)
 //! - anything else       one column `q`, one row holding the query text
 //!
-//! BEGIN fails when its `db` is `"fail"`.
+//! BEGIN fails when its `db` is `"fail"`. ROUTE answers with this server in
+//! every role.
 //!
 //! Every row carries the query text, so a test can tell whose result it got.
 //! A FAILURE puts the session in FAILED: everything but RESET is IGNORED.
@@ -27,7 +28,7 @@ use std::time::Duration;
 use boltwire::BoltValue;
 use boltwire::message::{
     BEGIN, COMMIT, DISCARD, FAILURE, GOODBYE, HELLO, IGNORED, LOGON, PULL, RECORD, RESET, ROLLBACK,
-    RUN, SUCCESS,
+    ROUTE, RUN, SUCCESS,
 };
 use boltwire::packstream::{Reader, pack};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -93,16 +94,18 @@ impl FakeBolt {
             shared: Arc::default(),
         };
         let shared = Arc::clone(&server.shared);
+        let self_addr = server.addr.to_string();
         tokio::spawn(async move {
             while let Ok((socket, _)) = listener.accept().await {
                 socket.set_nodelay(true).ok();
                 let id = shared.accepted.fetch_add(1, Ordering::SeqCst);
                 let (shared, options) = (Arc::clone(&shared), options.clone());
+                let self_addr = self_addr.clone();
                 tokio::spawn(async move {
                     if let Some(stream) = accept(socket, &options).await {
-                        Session::new(id, stream, options, Arc::clone(&shared))
-                            .serve()
-                            .await;
+                        let mut session = Session::new(id, stream, options, Arc::clone(&shared));
+                        session.self_addr = self_addr;
+                        session.serve().await;
                     }
                     shared.closed.fetch_add(1, Ordering::SeqCst);
                     shared.closed_notify.notify_waiters();
@@ -158,6 +161,8 @@ struct Session {
     query: String,
     /// A message read ahead (by `pipe:`) and not yet handled.
     lookahead: Option<(u8, Vec<BoltValue>)>,
+    /// This server's own address, as ROUTE advertises it.
+    self_addr: String,
 }
 
 impl Session {
@@ -171,6 +176,7 @@ impl Session {
             stream: VecDeque::new(),
             query: String::new(),
             lookahead: None,
+            self_addr: String::new(),
         }
     }
 
@@ -254,6 +260,18 @@ impl Session {
                     .await
             }
             BEGIN | ROLLBACK => self.send(SUCCESS, meta(&[])).await,
+            ROUTE => {
+                let me = BoltValue::List(vec![self.self_addr.clone().into()]);
+                let servers = ["ROUTE", "READ", "WRITE"]
+                    .into_iter()
+                    .map(|role| map(&[("addresses", me.clone()), ("role", role.into())]))
+                    .collect();
+                let rt = map(&[
+                    ("ttl", BoltValue::Int(300)),
+                    ("servers", BoltValue::List(servers)),
+                ]);
+                self.send(SUCCESS, meta(&[("rt", rt)])).await
+            }
             _ => {
                 self.fail("Fake.ClientError.Request.Invalid", "unknown message")
                     .await
@@ -389,12 +407,17 @@ fn failure(code: &str, message: &str) -> (u8, Vec<BoltValue>) {
     )
 }
 
+/// A single-map field list, the shape of every summary message.
 pub fn meta(entries: &[(&str, BoltValue)]) -> Vec<BoltValue> {
+    vec![map(entries)]
+}
+
+pub fn map(entries: &[(&str, BoltValue)]) -> BoltValue {
     let map: HashMap<String, BoltValue> = entries
         .iter()
         .map(|(k, v)| ((*k).to_string(), v.clone()))
         .collect();
-    vec![BoltValue::Map(map)]
+    BoltValue::Map(map)
 }
 
 /// Chunk a message (max 65535 bytes per chunk) and terminate it.

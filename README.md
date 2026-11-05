@@ -74,7 +74,7 @@ let mut w = routed.write().await?;   // round-robin over WRITE servers
 use boltwire::RustlsProvider;
 
 let tls = RustlsProvider::builder()
-    .add_root_pem(&std::fs::read("ca.pem")?)      // pin a private CA (optional)
+    .add_root_pem(&std::fs::read("ca.pem")?)      // trust a private CA (optional)
     // .danger_accept_invalid_certs(true)         // you know what this does
     .build()?;
 
@@ -82,6 +82,30 @@ let mut conn = BoltConnection::connect_tls(
     "db.example.com:7687", "db.example.com", Some(auth), &tls,
 ).await?;
 ```
+
+Trust only your private CA, not the public webpki roots:
+
+```rust
+use boltwire::tls::rustls::RootCertStore;
+
+let tls = RustlsProvider::builder()
+    .with_root_store(RootCertStore::empty())
+    .add_root_pem(&std::fs::read("ca.pem")?)
+    .build()?;
+```
+
+A self-signed server certificate made by `openssl req -x509` is marked as a
+CA, and webpki refuses it as the server's own cert (`CaUsedAsEndEntity`).
+Pin it instead: exactly that certificate is accepted, nothing else is.
+
+```rust
+let tls = RustlsProvider::builder()
+    .pin_certificate_pem(&std::fs::read("memgraph.crt")?)
+    .build()?;
+```
+
+The backend always uses ring explicitly, so linking aws-lc-rs elsewhere in
+the program (without installing a rustls default provider) is fine.
 
 Any type implementing `boltwire::TlsProvider` slots in the same way; `tls-rustls`
 is just the backend i use.

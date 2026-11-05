@@ -15,7 +15,13 @@ use tokio_rustls::rustls::crypto::{
     CryptoProvider, ring, verify_tls12_signature, verify_tls13_signature,
 };
 use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use tokio_rustls::rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
+use tokio_rustls::rustls::{
+    CertificateError, ClientConfig, DigitallySignedStruct, SignatureScheme,
+};
+
+/// The rustls trust store type taken by
+/// [`RustlsProviderBuilder::with_root_store`].
+pub use tokio_rustls::rustls::RootCertStore;
 
 use super::{BoltStream, TlsHandshake, TlsProvider};
 use crate::error::{BoltError, Result};
@@ -31,19 +37,71 @@ impl RustlsProvider {
     }
 }
 
+/// Trust, from most to least specific: [`danger_accept_invalid_certs`]
+/// accepts anything; otherwise pinned certificates, if any, are the only
+/// ones accepted; otherwise the server chain is verified against the roots
+/// (webpki's, or [`with_root_store`]'s, plus native and added ones).
+///
+/// [`danger_accept_invalid_certs`]: Self::danger_accept_invalid_certs
+/// [`with_root_store`]: Self::with_root_store
 #[derive(Default)]
 pub struct RustlsProviderBuilder {
+    root_store: Option<RootCertStore>,
     extra_roots_pem: Vec<Vec<u8>>,
+    extra_roots_der: Vec<CertificateDer<'static>>,
+    pins_pem: Vec<Vec<u8>>,
+    pins_der: Vec<CertificateDer<'static>>,
     accept_invalid: bool,
     native_roots: bool,
     identity: Option<(Vec<u8>, Vec<u8>)>,
 }
 
 impl RustlsProviderBuilder {
-    /// Extra PEM trust roots on top of webpki (pin a private CA / self-signed cert).
+    /// Extra PEM trust roots (a private CA) on top of the base roots.
+    ///
+    /// A self-signed server certificate works here only if it is not marked
+    /// as a CA. One made by `openssl req -x509` usually is (`CA:TRUE`), and
+    /// webpki refuses it as the server's own cert (`CaUsedAsEndEntity`);
+    /// [pin](Self::pin_certificate_pem) such a certificate instead.
     #[must_use]
     pub fn add_root_pem(mut self, pem: &[u8]) -> Self {
         self.extra_roots_pem.push(pem.to_vec());
+        self
+    }
+
+    /// Like [`add_root_pem`](Self::add_root_pem), for one DER certificate.
+    #[must_use]
+    pub fn add_root_der(mut self, der: &[u8]) -> Self {
+        self.extra_roots_der
+            .push(CertificateDer::from(der.to_vec()));
+        self
+    }
+
+    /// Replace the base roots (webpki's by default) with `roots`. Roots
+    /// from [`add_root_pem`](Self::add_root_pem) and
+    /// [`use_native_roots`](Self::use_native_roots) are still added on top;
+    /// `RootCertStore::empty()` plus a private CA trusts only that CA.
+    #[must_use]
+    pub fn with_root_store(mut self, roots: RootCertStore) -> Self {
+        self.root_store = Some(roots);
+        self
+    }
+
+    /// Accept exactly this server certificate (every one in the PEM), and
+    /// no other. Chain, names and validity dates are not checked: the pinned
+    /// certificate is the server's identity. The handshake signatures are
+    /// still verified against its key. For self-signed servers.
+    #[must_use]
+    pub fn pin_certificate_pem(mut self, pem: &[u8]) -> Self {
+        self.pins_pem.push(pem.to_vec());
+        self
+    }
+
+    /// Like [`pin_certificate_pem`](Self::pin_certificate_pem), for one DER
+    /// certificate.
+    #[must_use]
+    pub fn pin_certificate_der(mut self, der: &[u8]) -> Self {
+        self.pins_der.push(CertificateDer::from(der.to_vec()));
         self
     }
 
@@ -54,7 +112,7 @@ impl RustlsProviderBuilder {
         self
     }
 
-    /// Add the OS trust store on top of the webpki roots.
+    /// Add the OS trust store on top of the base roots.
     #[must_use]
     pub fn use_native_roots(mut self) -> Self {
         self.native_roots = true;
@@ -73,36 +131,54 @@ impl RustlsProviderBuilder {
         let versions = ClientConfig::builder_with_provider(Arc::clone(&crypto))
             .with_safe_default_protocol_versions()
             .map_err(|e| BoltError::Tls(format!("ring provider unusable: {e}")))?;
-        let builder = if self.accept_invalid {
+
+        let mut pins = self.pins_der;
+        for pem in &self.pins_pem {
+            let before = pins.len();
+            pins.extend(pem_certs(pem, "pinned certificate")?);
+            if pins.len() == before {
+                return Err(BoltError::Tls("no certificate in pinned PEM".into()));
+            }
+        }
+
+        let trust = if self.accept_invalid {
+            Some(Trust::Any)
+        } else if !pins.is_empty() {
+            Some(Trust::Pinned(pins))
+        } else {
+            None
+        };
+        let builder = if let Some(trust) = trust {
             versions
                 .dangerous()
-                .with_custom_certificate_verifier(Arc::new(NoVerification { provider: crypto }))
+                .with_custom_certificate_verifier(Arc::new(CustomVerifier {
+                    trust,
+                    provider: crypto,
+                }))
         } else {
-            let mut roots = RootCertStore {
+            let mut roots = self.root_store.unwrap_or_else(|| RootCertStore {
                 roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-            };
+            });
             if self.native_roots {
                 for cert in rustls_native_certs::load_native_certs().certs {
                     roots.add(cert).ok();
                 }
             }
+            let mut extra = self.extra_roots_der;
             for pem in &self.extra_roots_pem {
-                for cert in rustls_pemfile::certs(&mut pem.as_slice()) {
-                    let cert =
-                        cert.map_err(|e| BoltError::Tls(format!("invalid PEM root: {e}")))?;
-                    roots
-                        .add(cert)
-                        .map_err(|e| BoltError::Tls(format!("unusable PEM root: {e}")))?;
-                }
+                extra.extend(pem_certs(pem, "PEM root")?);
+            }
+            for cert in extra {
+                roots
+                    .add(cert)
+                    .map_err(|e| BoltError::Tls(format!("unusable root certificate: {e}")))?;
             }
             versions.with_root_certificates(roots)
         };
 
         let config = match self.identity {
             Some((cert_pem, key_pem)) => {
-                let certs = rustls_pemfile::certs(&mut cert_pem.as_slice())
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(|e| BoltError::Tls(format!("invalid client cert: {e}")))?;
+                let certs = pem_certs(&cert_pem, "client cert")?;
                 let key = rustls_pemfile::private_key(&mut key_pem.as_slice())
                     .map_err(|e| BoltError::Tls(format!("invalid client key: {e}")))?
                     .ok_or_else(|| BoltError::Tls("no private key in PEM".into()))?;
@@ -117,6 +193,13 @@ impl RustlsProviderBuilder {
             connector: TlsConnector::from(Arc::new(config)),
         })
     }
+}
+
+/// Every certificate in a PEM blob.
+fn pem_certs(pem: &[u8], what: &str) -> Result<Vec<CertificateDer<'static>>> {
+    rustls_pemfile::certs(&mut &*pem)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| BoltError::Tls(format!("invalid {what}: {e}")))
 }
 
 impl TlsProvider for RustlsProvider {
@@ -139,22 +222,40 @@ impl TlsProvider for RustlsProvider {
     }
 }
 
-/// Accepts any cert; signatures still checked against it.
 #[derive(Debug)]
-struct NoVerification {
+enum Trust {
+    /// Any certificate (`danger_accept_invalid_certs`).
+    Any,
+    /// Exactly these end-entity certificates.
+    Pinned(Vec<CertificateDer<'static>>),
+}
+
+/// Certificate acceptance by [`Trust`] instead of chain verification. The
+/// handshake signatures are still checked against the presented cert.
+#[derive(Debug)]
+struct CustomVerifier {
+    trust: Trust,
     provider: Arc<CryptoProvider>,
 }
 
-impl ServerCertVerifier for NoVerification {
+impl ServerCertVerifier for CustomVerifier {
     fn verify_server_cert(
         &self,
-        _end_entity: &CertificateDer<'_>,
+        end_entity: &CertificateDer<'_>,
         _intermediates: &[CertificateDer<'_>],
         _server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> std::result::Result<ServerCertVerified, tokio_rustls::rustls::Error> {
-        Ok(ServerCertVerified::assertion())
+        match &self.trust {
+            Trust::Any => Ok(ServerCertVerified::assertion()),
+            Trust::Pinned(pins) if pins.iter().any(|pin| pin.as_ref() == end_entity.as_ref()) => {
+                Ok(ServerCertVerified::assertion())
+            }
+            Trust::Pinned(_) => Err(tokio_rustls::rustls::Error::InvalidCertificate(
+                CertificateError::ApplicationVerificationFailure,
+            )),
+        }
     }
 
     fn verify_tls12_signature(

@@ -50,3 +50,30 @@ pub fn pki() -> Pki {
         server: Arc::new(server),
     }
 }
+
+/// A self-signed `localhost` cert with `CA:TRUE`, the way `openssl req
+/// -x509` makes one by default. As a trust root it fails webpki's
+/// end-entity check (`CaUsedAsEndEntity`); it can only be pinned.
+pub struct SelfSigned {
+    pub cert_pem: String,
+    pub server: Arc<ServerConfig>,
+}
+
+#[must_use]
+pub fn self_signed_ca_style() -> SelfSigned {
+    let key = KeyPair::generate().expect("key");
+    let mut params = CertificateParams::new(vec!["localhost".to_string()]).expect("params");
+    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let cert = params.self_signed(&key).expect("cert");
+    let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key.serialize_der()));
+    let server = ServerConfig::builder_with_provider(Arc::new(ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .expect("protocol versions")
+        .with_no_client_auth()
+        .with_single_cert(vec![cert.der().clone()], key)
+        .expect("server cert");
+    SelfSigned {
+        cert_pem: cert.pem(),
+        server: Arc::new(server),
+    }
+}

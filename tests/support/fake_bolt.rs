@@ -30,7 +30,7 @@ use boltwire::message::{
     RUN, SUCCESS,
 };
 use boltwire::packstream::{Reader, pack};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 
@@ -42,6 +42,22 @@ pub struct Options {
     /// After LOGON, stop reading for this long (lets the client's socket
     /// buffers fill so a large write blocks mid-frame).
     pub pause_after_logon: Option<Duration>,
+    /// Speak TLS with this config before the Bolt handshake.
+    #[cfg(feature = "tls-rustls")]
+    pub tls: Option<Arc<tokio_rustls::rustls::ServerConfig>>,
+}
+
+trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
+
+async fn accept(socket: TcpStream, options: &Options) -> Option<Box<dyn Io>> {
+    #[cfg(feature = "tls-rustls")]
+    if let Some(config) = &options.tls {
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::clone(config));
+        return Some(Box::new(acceptor.accept(socket).await.ok()?));
+    }
+    let _ = options;
+    Some(Box::new(socket))
 }
 
 pub struct FakeBolt {
@@ -83,9 +99,11 @@ impl FakeBolt {
                 let id = shared.accepted.fetch_add(1, Ordering::SeqCst);
                 let (shared, options) = (Arc::clone(&shared), options.clone());
                 tokio::spawn(async move {
-                    Session::new(id, socket, options, Arc::clone(&shared))
-                        .serve()
-                        .await;
+                    if let Some(stream) = accept(socket, &options).await {
+                        Session::new(id, stream, options, Arc::clone(&shared))
+                            .serve()
+                            .await;
+                    }
                     shared.closed.fetch_add(1, Ordering::SeqCst);
                     shared.closed_notify.notify_waiters();
                 });
@@ -131,7 +149,7 @@ impl FakeBolt {
 
 struct Session {
     id: usize,
-    socket: TcpStream,
+    socket: Box<dyn Io>,
     options: Options,
     shared: Arc<Shared>,
     failed: bool,
@@ -143,7 +161,7 @@ struct Session {
 }
 
 impl Session {
-    fn new(id: usize, socket: TcpStream, options: Options, shared: Arc<Shared>) -> Self {
+    fn new(id: usize, socket: Box<dyn Io>, options: Options, shared: Arc<Shared>) -> Self {
         Self {
             id,
             socket,
@@ -393,7 +411,7 @@ pub fn frame(signature: u8, fields: Vec<BoltValue>) -> Vec<u8> {
     out
 }
 
-async fn read_message(socket: &mut TcpStream) -> Option<(u8, Vec<BoltValue>)> {
+async fn read_message(socket: &mut (impl AsyncRead + Unpin)) -> Option<(u8, Vec<BoltValue>)> {
     let mut body = Vec::new();
     loop {
         let mut header = [0u8; 2];

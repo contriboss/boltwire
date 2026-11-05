@@ -1,4 +1,8 @@
 //! rustls backend (ring crypto). webpki roots by default.
+//!
+//! The ring provider is passed to rustls explicitly. rustls's process-wide
+//! default is never consulted: it panics when a program links both ring and
+//! aws-lc-rs and installs no default, and an installed one might not suit.
 
 use std::sync::Arc;
 
@@ -65,10 +69,14 @@ impl RustlsProviderBuilder {
     }
 
     pub fn build(self) -> Result<RustlsProvider> {
+        let crypto = Arc::new(ring::default_provider());
+        let versions = ClientConfig::builder_with_provider(Arc::clone(&crypto))
+            .with_safe_default_protocol_versions()
+            .map_err(|e| BoltError::Tls(format!("ring provider unusable: {e}")))?;
         let builder = if self.accept_invalid {
-            ClientConfig::builder()
+            versions
                 .dangerous()
-                .with_custom_certificate_verifier(Arc::new(NoVerification::new()))
+                .with_custom_certificate_verifier(Arc::new(NoVerification { provider: crypto }))
         } else {
             let mut roots = RootCertStore {
                 roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
@@ -87,7 +95,7 @@ impl RustlsProviderBuilder {
                         .map_err(|e| BoltError::Tls(format!("unusable PEM root: {e}")))?;
                 }
             }
-            ClientConfig::builder().with_root_certificates(roots)
+            versions.with_root_certificates(roots)
         };
 
         let config = match self.identity {
@@ -129,15 +137,7 @@ impl TlsProvider for RustlsProvider {
 /// Accepts any cert; signatures still checked against it.
 #[derive(Debug)]
 struct NoVerification {
-    provider: CryptoProvider,
-}
-
-impl NoVerification {
-    fn new() -> Self {
-        Self {
-            provider: ring::default_provider(),
-        }
-    }
+    provider: Arc<CryptoProvider>,
 }
 
 impl ServerCertVerifier for NoVerification {

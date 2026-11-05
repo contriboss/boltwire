@@ -12,5 +12,5 @@ fn remove_evicts_from_all_roles() {
     t.remove("a:7687");
     assert_eq!(t.routers, vec!["b:7687".to_string()]);
     assert_eq!(t.readers, vec!["b:7687".to_string()]);
-    assert!(t.writers.is_empty());
+    assert_eq!(t.writers, Vec::<String>::new());
 }

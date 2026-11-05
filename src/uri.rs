@@ -82,7 +82,7 @@ impl Config {
             None => (None, rest),
         };
 
-        let (host, port) = split_host_port(hostport).map_err(|m| err(m))?;
+        let (host, port) = split_host_port(hostport).map_err(err)?;
         let port = port.unwrap_or(7687);
 
         let db = query.and_then(|q| {

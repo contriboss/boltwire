@@ -132,8 +132,8 @@ pub struct BoltConnection {
     server_agent: Option<String>,
     connection_id: Option<String>,
     /// The session may not be READY: set before every exchange and cleared
-    /// only when it completes cleanly, and set when a Transaction or
-    /// RecordStream is dropped unfinished. The next operation RESETs first.
+    /// only when it completes cleanly, and set when a `Transaction` or
+    /// `RecordStream` is dropped unfinished. The next operation RESETs first.
     needs_reset: bool,
     /// Requests sent whose summary (SUCCESS/FAILURE/IGNORED) is still unread.
     pending: usize,
@@ -558,8 +558,10 @@ impl BoltConnection {
     fn take_message(&mut self) -> Result<Option<Vec<u8>>> {
         let noops = self
             .rbuf
-            .chunks_exact(2)
-            .take_while(|pair| *pair == [0, 0])
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .take_while(|pair| **pair == [0, 0])
             .count();
         self.rbuf.drain(..noops * 2);
 

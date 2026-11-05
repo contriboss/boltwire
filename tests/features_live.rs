@@ -338,7 +338,11 @@ async fn routed_pool_single_node() {
 
     let table = pool.table().await.unwrap();
     eprintln!("routed table: {table:?}");
-    assert!(!table.writers.is_empty());
+    assert_ne!(
+        table.writers,
+        Vec::<String>::new(),
+        "routing table has no writers"
+    );
 
     let mut w = pool.write().await.unwrap();
     let r = w.run("RETURN 1 AS n", HashMap::new()).await.unwrap();
@@ -421,7 +425,11 @@ async fn route_or_clean_failure() {
         // Single instance answers with itself in every role.
         let table = result.expect("Neo4j must answer ROUTE");
         eprintln!("routing table: {table:?}");
-        assert!(!table.writers.is_empty());
+        assert_ne!(
+            table.writers,
+            Vec::<String>::new(),
+            "routing table has no writers"
+        );
         assert!(table.ttl_seconds > 0);
     } else {
         // Memgraph doesn't speak ROUTE; must surface a clean failure and the

@@ -60,5 +60,9 @@ async fn neo4j_uri_routes() {
     // dialable here; prove URI -> pool -> ROUTE -> table works.
     let pool = config.routed_pool(2);
     let table = pool.table().await.unwrap();
-    assert!(!table.writers.is_empty());
+    assert_ne!(
+        table.writers,
+        Vec::<String>::new(),
+        "routing table has no writers"
+    );
 }

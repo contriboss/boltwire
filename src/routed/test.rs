@@ -82,3 +82,18 @@ fn transient_classification() {
     assert!(is_transient(&BoltError::Closed("eof".into())));
     assert!(!is_transient(&BoltError::Protocol("junk".into())));
 }
+
+#[tokio::test]
+async fn closed_routed_pool_refuses_checkouts() {
+    let dialled = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&dialled);
+    let pool = RoutedPool::new(vec!["seed:7687".into()], None, 1, move |_addr| {
+        seen.fetch_add(1, Ordering::SeqCst);
+        async { Err::<BoltConnection, _>(BoltError::Closed("unreachable".into())) }
+    });
+    assert!(!pool.is_closed());
+    pool.close().await;
+    assert!(pool.is_closed());
+    assert!(matches!(pool.write().await, Err(BoltError::Closed(m)) if m == "pool closed"));
+    assert_eq!(dialled.load(Ordering::SeqCst), 0, "nothing is dialled");
+}

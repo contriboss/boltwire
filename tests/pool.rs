@@ -179,3 +179,91 @@ async fn tls_handshake_cut_by_the_network_is_retried() {
     assert!(err.is_transient(), "{err:?}");
     assert_eq!(accepted.load(Ordering::SeqCst), 3);
 }
+
+#[tokio::test]
+async fn acquire_timeout_bounds_waiting_for_a_busy_pool() {
+    let server = FakeBolt::start().await;
+    let pool = pool(&server, 1).with_acquire_timeout(std::time::Duration::from_millis(100));
+    let _held = pool.get().await.expect("the only connection");
+
+    let started = std::time::Instant::now();
+    let err = pool.get().await.err().expect("pool exhausted");
+    assert!(matches!(err, boltwire::BoltError::Timeout(_)), "{err:?}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+}
+
+#[tokio::test]
+async fn acquire_timeout_bounds_a_stalled_connect() {
+    // Accepts, then never answers the Bolt handshake.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr").to_string();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    let pool = Pool::new(1, move || {
+        let addr = addr.clone();
+        async move { BoltConnection::connect(addr, None).await }
+    })
+    .with_acquire_timeout(std::time::Duration::from_millis(200));
+
+    let started = std::time::Instant::now();
+    let err = pool.get().await.err().expect("handshake never completes");
+    assert!(matches!(err, boltwire::BoltError::Timeout(_)), "{err:?}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+}
+
+#[tokio::test]
+async fn close_drains_idle_connections_and_fails_later_checkouts() {
+    let server = FakeBolt::start().await;
+    let pool = pool(&server, 2);
+    {
+        let mut conn = pool.get().await.expect("checkout");
+        conn.run("q", HashMap::new()).await.expect("query");
+    }
+    assert!(!pool.is_closed());
+
+    pool.close().await;
+    assert!(pool.is_closed());
+    tokio::time::timeout(std::time::Duration::from_secs(5), server.wait_closed(1))
+        .await
+        .expect("idle connection closed");
+    assert_eq!(
+        server.signatures(0).last(),
+        Some(&boltwire::message::GOODBYE),
+        "closed politely"
+    );
+
+    let err = pool.get().await.err().expect("pool is closed");
+    assert!(matches!(err, boltwire::BoltError::Closed(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn close_wakes_waiting_checkouts_and_retires_busy_connections() {
+    let server = FakeBolt::start().await;
+    let pool = pool(&server, 1);
+    let held = pool.get().await.expect("the only connection");
+
+    let waiter = {
+        let pool = pool.clone();
+        tokio::spawn(async move { pool.get().await.err() })
+    };
+    tokio::task::yield_now().await;
+    pool.close().await;
+    let err = tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+        .await
+        .expect("waiter woken")
+        .expect("task")
+        .expect("checkout fails");
+    assert!(matches!(err, boltwire::BoltError::Closed(_)), "{err:?}");
+
+    // The checked-out connection is closed when returned, not pooled.
+    drop(held);
+    tokio::time::timeout(std::time::Duration::from_secs(5), server.wait_closed(1))
+        .await
+        .expect("returned connection closed");
+}

@@ -56,7 +56,9 @@ struct PoolInner {
     /// A plain mutex: held only to push or pop, never across an await, so
     /// `Drop` can always take it instead of giving the connection up.
     idle: Mutex<Vec<Idle>>,
+    /// Closed by [`Pool::close`]; checkouts then fail.
     permits: Arc<Semaphore>,
+    acquire_timeout: Mutex<Option<Duration>>,
 }
 
 impl PoolInner {
@@ -94,13 +96,61 @@ impl Pool {
                 permits: Arc::new(Semaphore::new(config.max_size.max(1))),
                 config,
                 idle: Mutex::new(Vec::new()),
+                acquire_timeout: Mutex::new(None),
             }),
         }
+    }
+
+    /// Bound every [`get`](Self::get): waiting for a free slot, probing an
+    /// idle connection and connecting (retries included) must all finish
+    /// within `timeout`, or the checkout fails with [`BoltError::Timeout`].
+    /// Without one, a checkout waits as long as it takes. Applies to every
+    /// clone of this pool.
+    #[must_use]
+    pub fn with_acquire_timeout(self, timeout: Duration) -> Self {
+        *self
+            .inner
+            .acquire_timeout
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(timeout);
+        self
+    }
+
+    /// Close the pool: checkouts fail with [`BoltError::Closed`] from now
+    /// on (waiting ones included), idle connections get a GOODBYE, and
+    /// connections still checked out are closed when they come back.
+    pub async fn close(&self) {
+        self.inner.permits.close();
+        let idle = std::mem::take(&mut *self.inner.idle());
+        for idle in idle {
+            // Best effort; a dead peer must not hold up shutdown.
+            let _ = tokio::time::timeout(Duration::from_secs(1), idle.conn.close()).await;
+        }
+    }
+
+    /// Whether [`close`](Self::close) was called.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.inner.permits.is_closed()
     }
 
     /// Checkout. Idle connections are aged out (idle/lifetime) then RESET-probed;
     /// dead ones are discarded and a fresh one is minted with backoff.
     pub async fn get(&self) -> Result<PooledConnection> {
+        let limit = *self
+            .inner
+            .acquire_timeout
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match limit {
+            Some(limit) => tokio::time::timeout(limit, self.checkout())
+                .await
+                .map_err(|_| BoltError::Timeout("pool checkout"))?,
+            None => self.checkout().await,
+        }
+    }
+
+    async fn checkout(&self) -> Result<PooledConnection> {
         let permit = self
             .inner
             .permits
@@ -213,6 +263,9 @@ impl Drop for PooledConnection {
             if !conn.is_reusable() {
                 bolt_debug!("discarding a connection left mid-exchange");
                 return;
+            }
+            if self.inner.permits.is_closed() {
+                return; // pool closed while this was checked out
             }
             self.inner.idle().push(Idle {
                 conn,

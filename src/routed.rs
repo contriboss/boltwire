@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use tokio::sync::Mutex;
@@ -49,6 +49,7 @@ struct Inner {
     state: Mutex<State>,
     rr: [AtomicUsize; 2], // per-AccessMode round-robin cursors
     bookmarks: Mutex<Vec<String>>,
+    closed: AtomicBool,
 }
 
 #[derive(Default)]
@@ -80,6 +81,7 @@ impl RoutedPool {
                 state: Mutex::new(State::default()),
                 rr: [AtomicUsize::new(0), AtomicUsize::new(0)],
                 bookmarks: Mutex::new(Vec::new()),
+                closed: AtomicBool::new(false),
             }),
         }
     }
@@ -90,6 +92,25 @@ impl RoutedPool {
 
     pub async fn write(&self) -> Result<PooledConnection> {
         self.acquire(AccessMode::Write).await
+    }
+
+    /// Close every per-server pool (see [`Pool::close`]); later checkouts
+    /// fail with [`BoltError::Closed`].
+    pub async fn close(&self) {
+        self.inner.closed.store(true, Ordering::SeqCst);
+        let pools: Vec<Pool> = {
+            let mut state = self.inner.state.lock().await;
+            state.pools.drain().map(|(_, pool)| pool).collect()
+        };
+        for pool in pools {
+            pool.close().await;
+        }
+    }
+
+    /// Whether [`close`](Self::close) was called.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.inner.closed.load(Ordering::SeqCst)
     }
 
     /// Bookmarks observed so far (fed into the next managed transaction).
@@ -246,6 +267,9 @@ impl RoutedPool {
     }
 
     async fn acquire(&self, mode: AccessMode) -> Result<PooledConnection> {
+        if self.is_closed() {
+            return Err(BoltError::Closed("pool closed".into()));
+        }
         // Two laps: the second after a forced refresh when every server failed.
         for lap in 0..2 {
             if lap > 0 {

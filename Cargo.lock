@@ -120,9 +120,9 @@ dependencies = [
 
 [[package]]
 name = "chrono-machines"
-version = "0.8.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c40d6419edc5f97c6bb185250d951e3b395b679e274ba2c6685b376d0da93faf"
+checksum = "5d996487faa81efb79ce6f1e83220d1f2abb07ec2aeb2c6ff0f0608ad75c9746"
 dependencies = [
  "rand",
 ]
